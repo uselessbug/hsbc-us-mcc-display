@@ -46,7 +46,18 @@ MIN_REFERENCE_ENTRIES = {
 }
 MIN_REFERENCE_OVERLAP = 800
 MIN_GLOBAL_AB_CODES = 1005
+MIN_NAMED_INDUSTRY_CODES = 400
 SECONDARY_AGREEMENT = 0.82
+
+INDUSTRY_SENTINELS = {
+    "3000": ("united",),
+    "3043": ("aer lingus",),
+    "3374": ("rent",),
+    "3412": ("rent",),
+    "3514": ("amerisuites",),
+    "3530": ("renaissance",),
+    "3850": ("breezbay",),
+}
 
 KNOWN = {
     "0742": ("veterinary",),
@@ -362,10 +373,19 @@ def parse_industry_specific(text: str) -> dict[str, str]:
         else:
             result[code] = desc
 
-    if len(result) < 500:
+    if len(result) < MIN_NAMED_INDUSTRY_CODES:
         raise RuntimeError(
-            f"QRB industry-specific parser found only {len(result)} named codes"
+            f"QRB industry-specific parser found only {len(result)} named codes; "
+            f"expected at least {MIN_NAMED_INDUSTRY_CODES}"
         )
+
+    for code, expected in INDUSTRY_SENTINELS.items():
+        desc = result.get(code, "").lower()
+        if not desc or not any(token in desc for token in expected):
+            raise RuntimeError(
+                f"QRB industry-specific sentinel {code} missing/unexpected: "
+                f"{result.get(code)!r}"
+            )
     return result
 
 
