@@ -498,7 +498,7 @@ def san_antonio_column_rows(text: str) -> dict[str, str]:
             (
                 i
                 for i, line in enumerate(lines)
-                if clean_description(line).upper() == "MCC DESCRIPTION"
+                if "MCC DESCRIPTION" in clean_description(line).upper()
             ),
             None,
         )
