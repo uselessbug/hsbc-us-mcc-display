@@ -729,8 +729,12 @@ def validate(
             raise RuntimeError(f"Known MCC {code} missing or unexpected: {entries.get(code)!r}")
 
     for code, expected_parts in COMPLETE_TITLE_CHECKS.items():
-        desc = entries.get(code, "").lower()
-        if not desc or not all(part in desc for part in expected_parts):
+        desc = entries.get(code, "")
+        normalized = canonical_description(desc)
+        if not desc or not all(
+            canonical_description(part) in normalized
+            for part in expected_parts
+        ):
             raise RuntimeError(
                 f"QRB multiline title for MCC {code} appears truncated: "
                 f"{entries.get(code)!r}"
