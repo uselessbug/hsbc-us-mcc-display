@@ -5,6 +5,8 @@ Tampermonkey userscript for the HSBC US / FirstData credit-card transaction-hist
 ## What it does
 
 - Intercepts HSBC/FirstData `postedtransactions` responses and shows the actual posted Mastercard MCC next to each visible transaction.
+- Learns a local merchant-description → MCC history from posted transactions and uses it to predict pending MCCs when the pending merchant name exactly matches or is a prefix of a learned posted description.
+- Marks every pending prediction with a leading `~` and shows the supporting history count/confidence in the tooltip; predictions are never presented as authoritative MCCs.
 - Ignores FirstData's auxiliary zero-dollar FX rows (`transactionCode.display` is empty for those records).
 - Matches visible rows using date + signed amount + transaction type + normalized description.
 - Avoids modifying or wrapping HSBC's original transaction-type DOM nodes.
@@ -47,11 +49,23 @@ Secondary institutional references:
 
 The userscript sends no HSBC transaction data to GitHub or Mastercard.
 
-The only third-party request added by the script is a periodic anonymous GET for the static MCC JSON on `raw.githubusercontent.com`. Posted transaction data stays in the browser and is used only to match MCCs to the rows already rendered by HSBC.
+The only third-party request added by the script is a periodic anonymous GET for the static MCC JSON on `raw.githubusercontent.com`. Posted transaction data stays in the browser and is used only to match MCCs to the rows already rendered by HSBC and to build the local pending-prediction history described below.
 
-## Why pending transactions are not shown
+## Pending MCC predictions
 
-HSBC/FirstData's `pendingtransactions` response does not expose `merchantCategoryCode` (or a transaction identifier usable with the posted-transaction detail endpoint). This project therefore displays authoritative MCCs only after a transaction is posted rather than guessing from merchant names.
+HSBC/FirstData's `pendingtransactions` response does not expose `merchantCategoryCode` (or a transaction identifier usable with the posted-transaction detail endpoint), so an authoritative pending MCC is unavailable.
+
+The userscript can nevertheless make a conservative **local prediction** from previously posted transactions:
+
+- Only merchant descriptions learned from real posted MCCs are used.
+- Matching is limited to an exact normalized merchant name or a pending name that is a prefix of a learned posted description (for example, a pending name without the later city/country suffix).
+- If historical MCCs disagree and no MCC has at least 75% of the observations, no prediction is shown.
+- Predictions are rendered as `~5812`, not `5812`, and the tooltip shows the supporting count and confidence.
+- The merchant history is stored only in Tampermonkey script storage under `hsbcMcc.merchantHistory`; it is never uploaded.
+- The history stores normalized merchant descriptions, MCC counts, timestamps used for pruning, and hashed transaction observations used only for deduplication. It does not store transaction amounts or full transaction IDs.
+- A Tampermonkey menu command can clear the prediction history at any time.
+
+Authoritative posted MCCs continue to come directly from HSBC/FirstData.
 
 ## Development
 
