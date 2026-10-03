@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HSBC US Credit Card MCC Display
 // @namespace    https://github.com/uselessbug/hsbc-us-mcc-display
-// @version      4.3.2
+// @version      4.4.0
 // @description  Show posted Mastercard MCCs and locally predict pending MCCs from merchant history.
 // @homepageURL  https://github.com/uselessbug/hsbc-us-mcc-display
 // @supportURL   https://github.com/uselessbug/hsbc-us-mcc-display/issues
@@ -375,7 +375,9 @@
 
         posted.clear();
         for (const [key, bucket] of next) posted.set(key, bucket);
-        postedExport = exportRows;
+        postedExport = exportRows.sort((a, b) =>
+            String(b.transactionDate).localeCompare(String(a.transactionDate))
+        );
         log('Loaded posted transactions:', [...next.values()].reduce((n, b) => n + b.length, 0));
         scheduleDraw();
     }
