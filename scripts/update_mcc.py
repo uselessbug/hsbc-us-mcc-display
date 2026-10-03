@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Mastercard MCC JSON from the official Quick Reference Booklet attachment."""
+"""Generate a deterministic Mastercard MCC dictionary from the official Quick Reference Booklet PDF."""
 
 from __future__ import annotations
 
@@ -14,152 +14,76 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from openpyxl import load_workbook
-
 PDF_URL = (
     "https://www.mastercard.com/content/dam/mccom/shared/business/support/"
     "rules-pdfs/mastercard-quick-reference-booklet-merchant.pdf"
 )
-MIN_ENTRIES = 300
-MAX_ENTRIES = 1500
+
+MIN_ENTRIES = 500
+MAX_ENTRIES = 1600
+
 KNOWN = {
     "0742": ("veterinary",),
     "4121": ("taxi", "limousine"),
+    "4511": ("air",),
     "5812": ("restaurant", "eating"),
+    "6555": ("rebate", "reward"),
     "7011": ("hotel", "motel", "lodging"),
 }
 
+# Mastercard groups these industry-specific codes under range descriptions in the
+# extended section. Specific carrier/rental/hotel names found later in the PDF
+# override these generic labels.
+RANGES = (
+    (3000, 3350, "Airlines, Air Carriers"),
+    (3351, 3500, "Car Rental Agencies"),
+    (3501, 3999, "Lodging: Hotels, Motels, Resorts"),
+)
 
-def run(*args: str, cwd: Path | None = None) -> str:
+
+def run(*args: str) -> str:
     return subprocess.run(
-        args, cwd=cwd, check=True, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True,
+        args,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
     ).stdout
 
 
-def download(url: str, path: Path) -> None:
-    req = urllib.request.Request(
-        url,
+def download(path: Path) -> None:
+    request = urllib.request.Request(
+        PDF_URL,
         headers={
             "User-Agent": "Mozilla/5.0 (compatible; HSBC-MCC-DB-Updater/1.0)",
             "Accept": "application/pdf,*/*;q=0.8",
         },
     )
-    with urllib.request.urlopen(req, timeout=60) as response:  # noqa: S310
+    with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
         if response.status != 200:
             raise RuntimeError(f"Download failed: HTTP {response.status}")
         data = response.read()
+
     if not data.startswith(b"%PDF-"):
         raise RuntimeError("Mastercard source did not return a PDF")
     path.write_bytes(data)
 
 
-def attachments(pdf: Path, out: Path) -> list[Path]:
-    if not shutil.which("pdfdetach"):
-        raise RuntimeError("pdfdetach is required (install poppler-utils)")
-    out.mkdir(parents=True, exist_ok=True)
-    listing = run("pdfdetach", "-list", str(pdf))
-    if ".xlsx" not in listing.lower() and ".xlsm" not in listing.lower():
-        raise RuntimeError("No Excel attachment advertised by Mastercard PDF")
-    run("pdfdetach", "-saveall", str(pdf), cwd=out)
-    return sorted(p for p in out.iterdir() if p.suffix.lower() in {".xlsx", ".xlsm"})
-
-
-def workbook(files: list[Path]) -> Path:
-    if not files:
-        raise RuntimeError("No Excel attachment found")
-    def score(p: Path) -> tuple[int, str]:
-        n = p.name.lower()
-        return (
-            4 * ("mcc" in n) + 2 * ("merchant" in n)
-            + 2 * ("listing" in n) + ("comprehensive" in n),
-            n,
-        )
-    files.sort(key=score, reverse=True)
-    return files[0]
-
-
-def code(value: object) -> str | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return f"{value:04d}" if 0 <= value <= 9999 else None
-    if isinstance(value, float) and value.is_integer():
-        i = int(value)
-        return f"{i:04d}" if 0 <= i <= 9999 else None
-    s = str(value).strip()
-    return s.zfill(4) if re.fullmatch(r"\d{1,4}", s) else None
-
-
-def description(value: object) -> str | None:
-    if value is None:
-        return None
-    s = re.sub(r"\s+", " ", str(value)).strip()
-    return s if len(s) >= 3 else None
-
-
-def header(rows: list[tuple[object, ...]]) -> tuple[int, int, int] | None:
-    for row_no, row in enumerate(rows[:50]):
-        cells = [re.sub(r"\s+", " ", str(v or "")).strip().lower() for v in row]
-        mcc = [
-            i for i, v in enumerate(cells)
-            if v == "mcc" or "merchant category code" in v or "acceptor business code" in v
-        ]
-        desc = [
-            i for i, v in enumerate(cells)
-            if "description" in v or "merchant category" in v or "acceptor business" in v
-        ]
-        desc = [i for i in desc if i not in mcc]
-        if mcc and desc:
-            return row_no, mcc[0], desc[0]
-    return None
-
-
-def sheet_entries(sheet) -> dict[str, str] | None:
-    h = header(list(sheet.iter_rows(min_row=1, max_row=50, values_only=True)))
-    if not h:
-        return None
-    row_no, mcc_col, desc_col = h
-    result: dict[str, str] = {}
-    for row in sheet.iter_rows(min_row=row_no + 2, values_only=True):
-        if max(mcc_col, desc_col) >= len(row):
-            continue
-        c = code(row[mcc_col])
-        d = description(row[desc_col])
-        if not c or not d:
-            continue
-        previous = result.get(c)
-        if previous and previous.casefold() != d.casefold():
-            raise RuntimeError(f"Conflicting descriptions for MCC {c}: {previous!r} vs {d!r}")
-        result[c] = d
-    return dict(sorted(result.items(), key=lambda item: int(item[0])))
-
-
-def extract(path: Path) -> tuple[dict[str, str], str]:
-    book = load_workbook(path, read_only=True, data_only=True)
-    candidates: list[tuple[int, int, str, dict[str, str]]] = []
-    for sheet in book.worksheets:
-        entries = sheet_entries(sheet)
-        if not entries:
-            continue
-        name = sheet.title.lower()
-        name_score = 5 * ("mcc" in name) + 4 * ("merchant category" in name) + 3 * ("listing" in name)
-        candidates.append((len(entries), name_score, sheet.title, entries))
-    if not candidates:
-        raise RuntimeError("No recognizable MCC worksheet found")
-    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    count, _, title, entries = candidates[0]
-    print(f"Selected worksheet {title!r} with {count} entries")
-    return entries, title
-
-
-def document_date(pdf: Path) -> str:
+def pdf_text(pdf: Path, output: Path) -> str:
     if not shutil.which("pdftotext"):
         raise RuntimeError("pdftotext is required (install poppler-utils)")
-    with tempfile.TemporaryDirectory() as tmp:
-        text_file = Path(tmp) / "pages.txt"
-        run("pdftotext", "-f", "1", "-l", "8", str(pdf), str(text_file))
-        text = text_file.read_text(encoding="utf-8", errors="replace")
+    run("pdftotext", "-layout", str(pdf), str(output))
+    return output.read_text(encoding="utf-8", errors="replace")
+
+
+def clean_description(value: str) -> str:
+    value = value.replace("\u00ad", "")
+    value = re.sub(r"[.·]{3,}\s*\d*\s*$", "", value)
+    value = re.sub(r"\s+", " ", value).strip(" \t:;-")
+    return value
+
+
+def document_date(text: str) -> str:
     match = re.search(
         r"\b(\d{1,2})\s+"
         r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+"
@@ -172,30 +96,90 @@ def document_date(pdf: Path) -> str:
     return dt.datetime.strptime(" ".join(match.groups()), "%d %B %Y").date().isoformat()
 
 
+def extract(text: str) -> dict[str, str]:
+    entries: dict[str, str] = {}
+
+    # General MCC headings in the extended section. These also occur in the TOC
+    # and page footers; after normalization they resolve to the same short label.
+    heading_patterns = (
+        re.compile(r"^\s*MCC\s+(\d{4})\s*[:\-–—]\s*(.+?)\s*$", re.IGNORECASE),
+        re.compile(r"^\s*Description\s+of\s+MCC\s+(\d{4})\s*[:\-–—]\s*(.+?)\s*$", re.IGNORECASE),
+    )
+
+    for raw in text.splitlines():
+        for pattern in heading_patterns:
+            match = pattern.match(raw)
+            if not match:
+                continue
+            code, desc = match.groups()
+            desc = clean_description(desc)
+            if len(desc) < 3:
+                break
+            old = entries.get(code)
+            # Prefer a clean/short heading over a noisy TOC extraction.
+            if old is None or len(desc) < len(old):
+                entries[code] = desc
+            break
+
+    # Fill the three Mastercard industry-specific ranges. This guarantees useful
+    # descriptions even when a particular brand code is absent from the industry
+    # table in a future booklet revision.
+    for start, end, desc in RANGES:
+        for number in range(start, end + 1):
+            entries.setdefault(f"{number:04d}", desc)
+
+    # The Industry Specific MCC table contains rows such as:
+    #   3000 X United Airlines: UNITED
+    # It provides a better description than the generic range label.
+    industry = re.compile(r"^\s*(\d{4})\s+[A-Z]\s+(.+?)\s*$")
+    for raw in text.splitlines():
+        match = industry.match(raw)
+        if not match:
+            continue
+        code, desc = match.groups()
+        if not (3000 <= int(code) <= 3999):
+            continue
+        desc = clean_description(desc)
+        if len(desc) >= 3:
+            entries[code] = desc
+
+    return dict(sorted(entries.items(), key=lambda item: int(item[0])))
+
+
 def validate(entries: dict[str, str]) -> None:
     if not MIN_ENTRIES <= len(entries) <= MAX_ENTRIES:
         raise RuntimeError(f"Unexpected MCC count: {len(entries)}")
-    for c, words in KNOWN.items():
-        d = entries.get(c, "").lower()
-        if not d or not any(word in d for word in words):
-            raise RuntimeError(f"Known MCC {c} missing or unexpected: {entries.get(c)!r}")
+
+    for code, expected in KNOWN.items():
+        desc = entries.get(code, "").lower()
+        if not desc or not any(word in desc for word in expected):
+            raise RuntimeError(f"Known MCC {code} missing or unexpected: {entries.get(code)!r}")
+
+    for code, desc in entries.items():
+        if not re.fullmatch(r"\d{4}", code):
+            raise RuntimeError(f"Invalid MCC key: {code!r}")
+        if not isinstance(desc, str) or not desc.strip():
+            raise RuntimeError(f"Invalid description for MCC {code}")
 
 
-def write(entries: dict[str, str], date: str, sheet: str, output: Path) -> None:
+def write_database(entries: dict[str, str], version: str, output: Path) -> None:
     payload = {
         "schemaVersion": 1,
-        "version": date,
+        "version": version,
         "source": {
             "network": "Mastercard",
             "document": "Quick Reference Booklet - Merchant Edition",
             "url": PDF_URL,
-            "documentDate": date,
-            "worksheet": sheet,
+            "documentDate": version,
+            "method": "official-pdf-text",
         },
         "mcc": entries,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def main() -> int:
@@ -205,18 +189,21 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        pdf = root / "mastercard.pdf"
+        pdf = root / "mastercard-qrb.pdf"
+        txt = root / "mastercard-qrb.txt"
+
         print(f"Downloading {PDF_URL}")
-        download(PDF_URL, pdf)
-        date = document_date(pdf)
-        print(f"Document date: {date}")
-        xlsx = workbook(attachments(pdf, root / "attachments"))
-        print(f"Workbook: {xlsx.name}")
-        entries, sheet = extract(xlsx)
+        download(pdf)
+        text = pdf_text(pdf, txt)
+        version = document_date(text)
+        entries = extract(text)
         validate(entries)
+
+        print(f"Mastercard document date: {version}")
         print(f"Validated {len(entries)} MCC entries")
-        write(entries, date, sheet, args.output)
+        write_database(entries, version, args.output)
         print(f"Wrote {args.output}")
+
     return 0
 
 
