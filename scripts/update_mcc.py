@@ -347,7 +347,7 @@ def parse_extended_titles(text: str) -> dict[str, str]:
 
 def parse_industry_specific(text: str) -> dict[str, str]:
     result: dict[str, str] = {}
-    row = re.compile(r"(?:^|\s)(\d{4})\s+([AHV])\s+(.+?)\s*$")
+    row = re.compile(r"(?:^|\s)(\d{4})\s+([A-Z])\s+(.+?)\s*$")
 
     for raw in text.splitlines():
         match = row.search(raw)
