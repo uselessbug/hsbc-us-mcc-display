@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Build the HSBC US Mastercard MCC dictionary from authoritative/public references.
+"""Build a deterministic Mastercard MCC dictionary from public references.
 
 Primary source:
-- Mastercard Quick Reference Booklet - Merchant Edition
+- Mastercard Quick Reference Booklet - Merchant Edition (QRB)
 
-Secondary references are never allowed to overwrite Mastercard. They may only
-supply a description for a code that the current Mastercard QRB itself
-references in the global AB-program listing but does not otherwise describe,
-and only when both institutional references agree.
+Secondary institutional references:
+- City of San Antonio P-Card MCC table
+- Florida DFS PCard MCC table
+
+Mastercard always wins. Secondary references may only fill a QRB-referenced
+code that still lacks a Mastercard description, and only when both independent
+institutional tables agree. Parsers are fail-closed: source-format drift must
+raise instead of silently publishing a suspicious database.
 """
 
 from __future__ import annotations
@@ -35,8 +39,13 @@ SAN_ANTONIO_URL = (
 FLORIDA_DFS_URL = "https://fs.fldfs.com/iwpapps/pcard/docs/MCCs.pdf"
 
 MIN_ENTRIES = 500
-MAX_ENTRIES = 1600
-MIN_REFERENCE_ENTRIES = 300
+MAX_ENTRIES = 1700
+MIN_REFERENCE_ENTRIES = {
+    "san-antonio-pcard": 850,
+    "florida-dfs": 850,
+}
+MIN_REFERENCE_OVERLAP = 800
+MIN_GLOBAL_AB_CODES = 1005
 SECONDARY_AGREEMENT = 0.82
 
 KNOWN = {
@@ -48,13 +57,45 @@ KNOWN = {
     "7011": ("hotel", "motel", "lodging"),
 }
 
-# Mastercard groups these industry-specific codes under range descriptions in the
-# extended section. Specific carrier/rental/hotel names found later in the PDF
-# override these generic labels.
+COMPLETE_TITLE_CHECKS = {
+    "1740": ("contractors",),
+    "4813": ("long-distance", "key entry"),
+    "4814": ("recurring phone services",),
+    "5813": ("alcoholic beverages",),
+    "7372": ("integrated systems design services",),
+    "7802": ("u.s. region only",),
+    "7997": ("private golf courses",),
+    "9406": ("excluding u.s. region",),
+}
+
+COUNTRY_AB_SENTINELS = {
+    "1443",
+    "1484",
+    "7987",
+    "7988",
+    "7989",
+    "9407",
+    "9702",
+    "9753",
+    "9950",
+}
+
+REFERENCE_SENTINELS = {
+    "0742": ("veterinary",),
+    "5812": ("restaurant", "eating"),
+    "6536": ("moneysend", "money send"),
+    "6555": ("rebate", "reward"),
+}
+
 RANGES = (
     (3000, 3350, "Airlines, Air Carriers"),
     (3351, 3500, "Car Rental Agencies"),
     (3501, 3999, "Lodging: Hotels, Motels, Resorts"),
+)
+
+PROGRAM_HEADER = re.compile(r"^\s*([A-Z][A-Z0-9]{3}):\s*(.+?)\s*$")
+MCC_RANGE = re.compile(
+    r"(?<![A-Z0-9])(\d{4})(?:\s*[-–—]\s*(\d{4}))?(?![A-Z0-9])"
 )
 
 
@@ -95,9 +136,24 @@ def pdf_text(pdf: Path, output: Path) -> str:
 
 def clean_description(value: str) -> str:
     value = value.replace("\u00ad", "")
+    value = value.replace("\x02", " ")
     value = re.sub(r"[.·]{3,}\s*\d*\s*$", "", value)
     value = re.sub(r"\s+", " ", value).strip(" \t:;-")
     return value
+
+
+def qrb_noise(value: str) -> bool:
+    line = clean_description(value)
+    if not line:
+        return True
+    return (
+        line.startswith("Quick Reference Booklet")
+        or line.startswith("© 1990")
+        or line == "Acceptor business codes (MCCs)"
+        or line == "AB program listing with acceptor business codes (MCCs)"
+        or line == "Country-specific AB programs with acceptor business codes (MCCs)"
+        or line == "Industry Specific Acceptor Business Codes (MCCs)"
+    )
 
 
 def document_date(text: str) -> str:
@@ -113,17 +169,32 @@ def document_date(text: str) -> str:
     return dt.datetime.strptime(" ".join(match.groups()), "%d %B %Y").date().isoformat()
 
 
-def expand_code_list(value: str) -> list[str] | None:
-    """Parse a line that consists only of MCCs/ranges separated by commas."""
-    value = value.replace("–", "-").replace("—", "-").strip()
+def mcc_mentions(value: str) -> set[str]:
+    """Return every explicit four-digit MCC/range mentioned in a line."""
+    result: set[str] = set()
+    for match in MCC_RANGE.finditer(value):
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if end < start or end - start > 1000:
+            continue
+        result.update(f"{number:04d}" for number in range(start, end + 1))
+    return result
+
+
+def direct_code_list(value: str) -> list[str] | None:
+    """Parse a body that contains only comma-separated MCCs/ranges."""
+    normalized = value.replace("–", "-").replace("—", "-").strip(" ,.;")
+    if not normalized:
+        return []
     if not re.fullmatch(
-        r"\d{4}(?:\s*-\s*\d{4})?(?:\s*,\s*\d{4}(?:\s*-\s*\d{4})?)*",
-        value,
+        r"\d{4}(?:\s*-\s*\d{4})?"
+        r"(?:\s*,\s*\d{4}(?:\s*-\s*\d{4})?)*",
+        normalized,
     ):
         return None
 
     result: list[str] = []
-    for token in re.split(r"\s*,\s*", value):
+    for token in re.split(r"\s*,\s*", normalized):
         if "-" not in token:
             result.append(token)
             continue
@@ -135,86 +206,184 @@ def expand_code_list(value: str) -> list[str] | None:
     return result
 
 
-def global_ab_programs(text: str) -> tuple[dict[str, dict[str, object]], set[str]]:
-    """Parse Mastercard's global AB-program -> MCC listing.
-
-    This section is useful because some network-level MCCs, notably 6555, are
-    listed by an AB program even though they have no extended MCC chapter.
-    """
-    start = text.find("All AB programs")
+def section(text: str, start_marker: str, end_marker: str | None = None) -> str:
+    start = text.find(start_marker)
     if start < 0:
-        raise RuntimeError("Unable to find Mastercard global AB-program listing")
+        raise RuntimeError(f"Unable to find QRB section: {start_marker}")
+    if end_marker is None:
+        return text[start:]
+    end = text.find(end_marker, start + len(start_marker))
+    if end < 0:
+        raise RuntimeError(f"Unable to find QRB section end: {end_marker}")
+    return text[start:end]
 
-    end_markers = (
-        "Country-specific AB programs with acceptor business codes",
-        "Country-specific AB programs",
-        "Processing exceptions",
-    )
-    ends = [text.find(marker, start + 1) for marker in end_markers]
-    ends = [position for position in ends if position > start]
-    segment = text[start : min(ends) if ends else len(text)]
 
+def parse_ab_programs(segment: str) -> dict[str, dict[str, object]]:
+    """Parse AB program headers plus their multi-line bodies.
+
+    We intentionally retain free-form body text. Direct MCC mentions are
+    extracted from every continuation line, so line wrapping and trailing commas
+    do not lose codes. Program-to-program references are recorded separately.
+    """
     programs: dict[str, dict[str, object]] = {}
     current: str | None = None
-    header = re.compile(r"\b([A-Z][A-Z0-9]{3}):\s*(.+?)\s*$")
 
     for raw in segment.splitlines():
-        line = clean_description(raw)
-        if not line:
+        if qrb_noise(raw):
             continue
-
-        match = header.search(line)
+        line = clean_description(raw)
+        match = PROGRAM_HEADER.match(line)
         if match:
             code, desc = match.groups()
-            # Strip a page-number/footer prefix that pdftotext can occasionally
-            # leave attached to the first program on a page.
-            desc = clean_description(desc)
-            programs[code] = {"description": desc, "mccs": []}
+            programs[code] = {
+                "description": clean_description(desc),
+                "body": [],
+                "mccs": set(),
+                "programRefs": set(),
+            }
             current = code
             continue
 
         if current is None:
             continue
 
-        codes = expand_code_list(line)
-        if codes is not None:
-            programs[current]["mccs"].extend(codes)
+        programs[current]["body"].append(line)
+        programs[current]["mccs"].update(mcc_mentions(line))
 
-    ab_codes: set[str] = set()
+    known_programs = set(programs)
+    for code, program in programs.items():
+        body_text = " ".join(program["body"])
+        refs = {
+            token
+            for token in re.findall(r"\b[A-Z][A-Z0-9]{3}\b", body_text)
+            if token in known_programs and token != code
+        }
+        program["programRefs"] = refs
+
+    return programs
+
+
+def program_codes(programs: dict[str, dict[str, object]]) -> set[str]:
+    result: set[str] = set()
     for program in programs.values():
-        ab_codes.update(program["mccs"])
+        result.update(program["mccs"])
+    return result
 
-    if "I001" not in programs or "6555" not in programs["I001"]["mccs"]:
-        raise RuntimeError("Mastercard AB-program parser did not find I001 -> MCC 6555")
 
-    return programs, ab_codes
+def program_direct_membership(program: dict[str, object]) -> list[str] | None:
+    """Return exact direct membership only when the body is a plain code list."""
+    body = " ".join(program["body"])
+    return direct_code_list(body)
+
+
+def parse_extended_titles(text: str) -> dict[str, str]:
+    """Parse full multi-line 'Description of MCC ####:' titles.
+
+    QRB frequently wraps titles across physical lines. Accumulate continuation
+    lines until the TCC/MCC-description block begins instead of truncating the
+    first line.
+    """
+    lines = text.splitlines()
+    result: dict[str, str] = {}
+    start_re = re.compile(
+        r"^\s*Description\s+of\s+MCC\s+(\d{4})\s*:\s*(.*?)\s*$",
+        re.IGNORECASE,
+    )
+
+    for index, raw in enumerate(lines):
+        match = start_re.match(raw)
+        if not match:
+            continue
+
+        code, first = match.groups()
+        parts = [clean_description(first)] if clean_description(first) else []
+
+        for offset in range(index + 1, min(index + 10, len(lines))):
+            candidate_raw = lines[offset]
+            candidate = clean_description(candidate_raw)
+            if qrb_noise(candidate_raw):
+                continue
+            if (
+                re.match(r"^TCC\b", candidate, re.IGNORECASE)
+                or re.match(r"^MCC\s+Description\b", candidate, re.IGNORECASE)
+                or re.match(r"^MCC\s+Category\b", candidate, re.IGNORECASE)
+                or re.match(r"^AB\s+Programs\b", candidate, re.IGNORECASE)
+                or re.match(r"^Country-specific\s*:", candidate, re.IGNORECASE)
+                or start_re.match(candidate_raw)
+                or re.match(r"^MCC\s+\d{4}\s*:", candidate, re.IGNORECASE)
+            ):
+                break
+            if candidate:
+                parts.append(candidate)
+
+        title = clean_description(" ".join(parts))
+        if len(title) < 3:
+            raise RuntimeError(f"Empty/invalid extended title for MCC {code}")
+
+        old = result.get(code)
+        if old and old.casefold() != title.casefold():
+            raise RuntimeError(
+                f"Conflicting QRB extended titles for MCC {code}: {old!r} vs {title!r}"
+            )
+        result[code] = title
+
+    if len(result) < 250:
+        raise RuntimeError(
+            f"QRB extended-title parser found only {len(result)} MCC descriptions"
+        )
+    return result
+
+
+def parse_industry_specific(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    row = re.compile(r"(?:^|\s)(\d{4})\s+([AHV])\s+(.+?)\s*$")
+
+    for raw in text.splitlines():
+        match = row.search(raw)
+        if not match:
+            continue
+        code, _kind, desc = match.groups()
+        if not 3000 <= int(code) <= 3999:
+            continue
+        desc = clean_description(desc)
+        if len(desc) < 3:
+            continue
+        old = result.get(code)
+        if old and old.casefold() != desc.casefold():
+            # Prefer the longer label only when one extraction is a prefix of the
+            # other; otherwise fail closed on a real conflict.
+            a, b = old.casefold(), desc.casefold()
+            if a in b:
+                result[code] = desc
+            elif b not in a:
+                raise RuntimeError(
+                    f"Conflicting industry labels for MCC {code}: {old!r} vs {desc!r}"
+                )
+        else:
+            result[code] = desc
+
+    if len(result) < 500:
+        raise RuntimeError(
+            f"QRB industry-specific parser found only {len(result)} named codes"
+        )
+    return result
 
 
 def extract_mastercard(
     text: str,
-) -> tuple[dict[str, str], dict[str, dict[str, str]], set[str]]:
+) -> tuple[
+    dict[str, str],
+    dict[str, dict[str, str]],
+    set[str],
+    set[str],
+]:
     entries: dict[str, str] = {}
     provenance: dict[str, dict[str, str]] = {}
 
-    heading_patterns = (
-        re.compile(r"^\s*MCC\s+(\d{4})\s*[:\-–—]\s*(.+?)\s*$", re.IGNORECASE),
-        re.compile(r"^\s*Description\s+of\s+MCC\s+(\d{4})\s*[:\-–—]\s*(.+?)\s*$", re.IGNORECASE),
-    )
-
-    for raw in text.splitlines():
-        for pattern in heading_patterns:
-            match = pattern.match(raw)
-            if not match:
-                continue
-            code, desc = match.groups()
-            desc = clean_description(desc)
-            if len(desc) < 3:
-                break
-            old = entries.get(code)
-            if old is None or len(desc) < len(old):
-                entries[code] = desc
-                provenance[code] = {"source": "mastercard-qrb-extended"}
-            break
+    extended = parse_extended_titles(text)
+    for code, desc in extended.items():
+        entries[code] = desc
+        provenance[code] = {"source": "mastercard-qrb-extended"}
 
     for start, end, desc in RANGES:
         for number in range(start, end + 1):
@@ -223,29 +392,48 @@ def extract_mastercard(
                 entries[code] = desc
                 provenance[code] = {"source": "mastercard-qrb-industry-range"}
 
-    industry = re.compile(r"^\s*(\d{4})\s+[A-Z]\s+(.+?)\s*$")
-    for raw in text.splitlines():
-        match = industry.match(raw)
-        if not match:
-            continue
-        code, desc = match.groups()
-        if not (3000 <= int(code) <= 3999):
-            continue
-        desc = clean_description(desc)
-        if len(desc) >= 3:
-            entries[code] = desc
-            provenance[code] = {"source": "mastercard-qrb-industry-specific"}
+    industry = parse_industry_specific(text)
+    for code, desc in industry.items():
+        entries[code] = desc
+        provenance[code] = {"source": "mastercard-qrb-industry-specific"}
 
-    programs, ab_codes = global_ab_programs(text)
+    global_segment = section(
+        text,
+        "All AB programs",
+        "Country-specific AB programs with acceptor business codes (MCCs)",
+    )
+    global_programs = parse_ab_programs(global_segment)
+    global_codes = program_codes(global_programs)
 
-    # A singleton AB program provides an unambiguous current-Mastercard label
-    # for an MCC that may not have an extended chapter. I001 -> 6555 is the
-    # important example for HSBC Elite rideshare rebates.
-    for program_code, program in programs.items():
-        mccs = list(dict.fromkeys(program["mccs"]))
-        if len(mccs) != 1:
+    country_segment = section(
+        text,
+        "Country-specific AB programs with acceptor business codes (MCCs)",
+    )
+    country_programs = parse_ab_programs(country_segment)
+    country_codes = program_codes(country_programs)
+
+    if len(global_codes) < MIN_GLOBAL_AB_CODES:
+        raise RuntimeError(
+            f"Global AB parser found only {len(global_codes)} explicit MCCs; "
+            f"expected at least {MIN_GLOBAL_AB_CODES}"
+        )
+
+    missing_country_sentinels = COUNTRY_AB_SENTINELS - country_codes
+    if missing_country_sentinels:
+        raise RuntimeError(
+            "Country-specific AB parser missed known QRB MCCs: "
+            + ", ".join(sorted(missing_country_sentinels))
+        )
+
+    # A singleton AB program provides an unambiguous Mastercard label for a
+    # network-level MCC that may not have an extended chapter. Only use a
+    # literal/direct code-list body; never infer a description from an "except"
+    # rule or another program reference.
+    for program_code, program in global_programs.items():
+        membership = program_direct_membership(program)
+        if membership is None or len(set(membership)) != 1:
             continue
-        code = mccs[0]
+        code = membership[0]
         if code in entries:
             continue
         desc = clean_description(str(program["description"]))
@@ -260,37 +448,86 @@ def extract_mastercard(
     return (
         dict(sorted(entries.items(), key=lambda item: int(item[0]))),
         provenance,
-        ab_codes,
+        global_codes,
+        country_codes,
     )
 
 
+def clean_reference_description(desc: str, source: str) -> str:
+    desc = desc.replace("\x02", " ")
+    if source == "san-antonio-pcard":
+        desc = re.sub(
+            r"\s+I\s+I\s+I(?:\s+.*)?$",
+            "",
+            desc,
+            flags=re.IGNORECASE,
+        )
+        desc = re.sub(r'\s+"?INCLUDE"?\s*$', "", desc, flags=re.IGNORECASE)
+    elif source == "florida-dfs":
+        desc = re.sub(r"\s+[ARP]\s*$", "", desc)
+    return clean_description(desc)
+
+
 def extract_institutional_reference(text: str, source: str) -> dict[str, str]:
-    """Extract a simple four-digit MCC -> description table from a public PDF."""
-    result: dict[str, str] = {}
+    """Extract MCC->description rows with conflict detection and sentinels."""
+    candidates: dict[str, list[str]] = {}
 
     for raw in text.splitlines():
         match = re.match(r"^\s*(\d{4})\s+(.+?)\s*$", raw)
         if not match:
             continue
-
         code, desc = match.groups()
-        desc = re.sub(r"\s+I\s+I\s+I\b.*$", "", desc)
-        if source == "san-antonio-pcard":
-            desc = re.sub(r"\s+INCLUDE\s*$", "", desc, flags=re.IGNORECASE)
-        elif source == "florida-dfs":
-            desc = re.sub(r"\s+[ARP]\s*$", "", desc)
-
-        desc = clean_description(desc)
+        desc = clean_reference_description(desc, source)
         if len(desc) < 3:
             continue
+        candidates.setdefault(code, []).append(desc)
 
-        # First occurrence is sufficient and avoids footer/table extraction noise.
-        result.setdefault(code, desc)
+    result: dict[str, str] = {}
+    conflicts: dict[str, list[str]] = {}
 
-    if len(result) < MIN_REFERENCE_ENTRIES:
-        raise RuntimeError(
-            f"{source} parser found only {len(result)} MCC entries; refusing to use it"
+    for code, values in candidates.items():
+        unique: list[str] = []
+        for value in values:
+            if not any(value.casefold() == old.casefold() for old in unique):
+                unique.append(value)
+
+        if len(unique) == 1:
+            result[code] = unique[0]
+            continue
+
+        # PDF extraction can repeat a row with a truncated copy. Accept only
+        # prefix-compatible duplicates, preferring the longest text.
+        longest = max(unique, key=len)
+        if all(
+            canonical_description(value) in canonical_description(longest)
+            or canonical_description(longest) in canonical_description(value)
+            for value in unique
+        ):
+            result[code] = longest
+        else:
+            conflicts[code] = unique
+
+    if conflicts:
+        preview = "; ".join(
+            f"{code}: {values!r}"
+            for code, values in list(sorted(conflicts.items()))[:5]
         )
+        raise RuntimeError(f"{source} produced conflicting MCC rows: {preview}")
+
+    minimum = MIN_REFERENCE_ENTRIES[source]
+    if len(result) < minimum:
+        raise RuntimeError(
+            f"{source} parser found only {len(result)} MCC entries; "
+            f"expected at least {minimum}"
+        )
+
+    for code, expected in REFERENCE_SENTINELS.items():
+        desc = result.get(code, "").lower()
+        if not desc or not any(token in desc for token in expected):
+            raise RuntimeError(
+                f"{source} sentinel MCC {code} missing/unexpected: {result.get(code)!r}"
+            )
+
     return result
 
 
@@ -310,20 +547,34 @@ def descriptions_agree(left: str, right: str) -> bool:
     b = canonical_description(right)
     if not a or not b:
         return False
+    if a in b or b in a:
+        return True
     return difflib.SequenceMatcher(None, a, b).ratio() >= SECONDARY_AGREEMENT
+
+
+def validate_reference_pair(
+    san_antonio: dict[str, str],
+    florida: dict[str, str],
+) -> None:
+    overlap = set(san_antonio) & set(florida)
+    if len(overlap) < MIN_REFERENCE_OVERLAP:
+        raise RuntimeError(
+            f"Institutional MCC overlap dropped to {len(overlap)}; "
+            f"expected at least {MIN_REFERENCE_OVERLAP}"
+        )
 
 
 def apply_secondary_consensus(
     entries: dict[str, str],
     provenance: dict[str, dict[str, str]],
-    ab_codes: set[str],
+    qrb_codes: set[str],
     san_antonio: dict[str, str],
     florida: dict[str, str],
 ) -> dict[str, dict[str, object]]:
     """Add only QRB-referenced missing MCCs confirmed by both institutions."""
     added: dict[str, dict[str, object]] = {}
 
-    for code in sorted(ab_codes, key=int):
+    for code in sorted(qrb_codes, key=int):
         if code in entries:
             continue
         left = san_antonio.get(code)
@@ -345,7 +596,11 @@ def apply_secondary_consensus(
     return added
 
 
-def validate(entries: dict[str, str]) -> None:
+def validate(
+    entries: dict[str, str],
+    global_codes: set[str],
+    country_codes: set[str],
+) -> None:
     if not MIN_ENTRIES <= len(entries) <= MAX_ENTRIES:
         raise RuntimeError(f"Unexpected MCC count: {len(entries)}")
 
@@ -353,6 +608,19 @@ def validate(entries: dict[str, str]) -> None:
         desc = entries.get(code, "").lower()
         if not desc or not any(word in desc for word in expected):
             raise RuntimeError(f"Known MCC {code} missing or unexpected: {entries.get(code)!r}")
+
+    for code, expected_parts in COMPLETE_TITLE_CHECKS.items():
+        desc = entries.get(code, "").lower()
+        if not desc or not all(part in desc for part in expected_parts):
+            raise RuntimeError(
+                f"QRB multiline title for MCC {code} appears truncated: "
+                f"{entries.get(code)!r}"
+            )
+
+    if len(global_codes) < MIN_GLOBAL_AB_CODES:
+        raise RuntimeError("Global AB code count failed final validation")
+    if not COUNTRY_AB_SENTINELS <= country_codes:
+        raise RuntimeError("Country-specific AB sentinels failed final validation")
 
     for code, desc in entries.items():
         if not re.fullmatch(r"\d{4}", code):
@@ -370,7 +638,7 @@ def write_database(entries: dict[str, str], version: str, output: Path) -> None:
             "document": "Quick Reference Booklet - Merchant Edition",
             "url": MASTERCARD_URL,
             "documentDate": version,
-            "method": "official-pdf-text+global-ab-programs",
+            "method": "official-pdf-structured-parser",
             "secondaryReferences": [
                 SAN_ANTONIO_URL,
                 FLORIDA_DFS_URL,
@@ -390,12 +658,14 @@ def write_report(
     version: str,
     entries: dict[str, str],
     provenance: dict[str, dict[str, str]],
-    ab_codes: set[str],
+    global_codes: set[str],
+    country_codes: set[str],
     san_antonio: dict[str, str],
     florida: dict[str, str],
     secondary_added: dict[str, dict[str, object]],
     output: Path,
 ) -> None:
+    qrb_codes = global_codes | country_codes
     ab_additions = {
         code: {
             "description": entries[code],
@@ -413,6 +683,8 @@ def write_report(
         if provenance.get(code, {}).get("source") == "mastercard-qrb-ab-program"
     }
 
+    qrb_without_description = sorted(qrb_codes - set(entries), key=int)
+
     secondary_only_agreements = {
         code: {
             "sanAntonio": san_antonio[code],
@@ -424,7 +696,7 @@ def write_report(
     }
 
     report = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "version": version,
         "sources": {
             "mastercardQrb": MASTERCARD_URL,
@@ -433,16 +705,21 @@ def write_report(
         },
         "counts": {
             "published": len(entries),
-            "mastercardGlobalAbReferenced": len(ab_codes),
+            "qrbGlobalAbReferenced": len(global_codes),
+            "qrbCountrySpecificAbReferenced": len(country_codes),
+            "qrbAnyAbReferenced": len(qrb_codes),
+            "qrbReferencedWithoutDescription": len(qrb_without_description),
             "sanAntonioReference": len(san_antonio),
             "floridaDfsReference": len(florida),
+            "institutionalReferenceOverlap": len(set(san_antonio) & set(florida)),
             "mastercardAbProgramAdditions": len(ab_additions),
             "secondaryConsensusAdditions": len(secondary_added),
-            "secondaryConsensusNotInCurrentMastercard": len(secondary_only_agreements),
+            "secondaryConsensusNotInPublishedDb": len(secondary_only_agreements),
         },
         "mastercardAbProgramAdditions": ab_additions,
         "secondaryConsensusAdditions": secondary_added,
-        "secondaryConsensusNotInCurrentMastercard": secondary_only_agreements,
+        "qrbReferencedWithoutDescription": qrb_without_description,
+        "secondaryConsensusNotInPublishedDb": secondary_only_agreements,
     }
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -464,7 +741,6 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-
         source_specs = {
             "mastercard": (MASTERCARD_URL, root / "mastercard-qrb.pdf"),
             "san-antonio": (SAN_ANTONIO_URL, root / "san-antonio-mcc.pdf"),
@@ -479,29 +755,42 @@ def main() -> int:
             texts[name] = pdf_text(pdf, txt)
 
         version = document_date(texts["mastercard"])
-        entries, provenance, ab_codes = extract_mastercard(texts["mastercard"])
+        entries, provenance, global_codes, country_codes = extract_mastercard(
+            texts["mastercard"]
+        )
 
         san_antonio = extract_institutional_reference(
             texts["san-antonio"], "san-antonio-pcard"
         )
         florida = extract_institutional_reference(texts["florida"], "florida-dfs")
+        validate_reference_pair(san_antonio, florida)
 
+        qrb_codes = global_codes | country_codes
         secondary_added = apply_secondary_consensus(
             entries,
             provenance,
-            ab_codes,
+            qrb_codes,
             san_antonio,
             florida,
         )
 
-        validate(entries)
+        validate(entries, global_codes, country_codes)
 
         print(f"Mastercard document date: {version}")
         print(f"Published MCC entries: {len(entries)}")
+        print(f"Global AB referenced MCCs: {len(global_codes)}")
+        print(f"Country-specific AB referenced MCCs: {len(country_codes)}")
+        print(f"Any QRB AB referenced MCCs: {len(qrb_codes)}")
         print(
             "MCC 6555:",
             entries["6555"],
             f"({provenance['6555'].get('source')})",
+        )
+        print(f"San Antonio parsed MCCs: {len(san_antonio)}")
+        print(f"Florida DFS parsed MCCs: {len(florida)}")
+        print(
+            "Institutional overlap:",
+            len(set(san_antonio) & set(florida)),
         )
         print(f"Secondary consensus additions: {len(secondary_added)}")
 
@@ -510,7 +799,8 @@ def main() -> int:
             version=version,
             entries=entries,
             provenance=provenance,
-            ab_codes=ab_codes,
+            global_codes=global_codes,
+            country_codes=country_codes,
             san_antonio=san_antonio,
             florida=florida,
             secondary_added=secondary_added,
