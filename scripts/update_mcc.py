@@ -489,33 +489,54 @@ def clean_reference_description(desc: str, source: str) -> str:
 
 
 def san_antonio_column_rows(text: str) -> dict[str, str]:
-    """Recover San Antonio pages whose PDF reading order emits MCCs as a column."""
+    """Recover San Antonio column blocks independent of PDF page boundaries."""
+    lines = text.splitlines()
     recovered: dict[str, str] = {}
+    i = 0
 
-    for page_no, page in enumerate(text.split("\f"), start=1):
-        lines = page.splitlines()
+    while i < len(lines):
+        if not re.fullmatch(r"\s*\d{4}\s*", lines[i]):
+            i += 1
+            continue
+
+        codes: list[str] = []
+        j = i
+        while j < len(lines):
+            stripped = lines[j].strip()
+            if re.fullmatch(r"\d{4}", stripped):
+                codes.append(stripped)
+                j += 1
+                continue
+            if not stripped:
+                j += 1
+                continue
+            break
+
+        if len(codes) < 5:
+            i = max(i + 1, j)
+            continue
+
+        # In this PDF the MCC column can be emitted as a block before the
+        # description column. The description header follows shortly after the
+        # code block, but need not be a standalone line.
         header_index = next(
             (
-                i
-                for i, line in enumerate(lines)
-                if "MCC DESCRIPTION" in clean_description(line).upper()
+                k
+                for k in range(j, min(j + 25, len(lines)))
+                if "MCC DESCRIPTION" in clean_description(lines[k]).upper()
             ),
             None,
         )
         if header_index is None:
-            continue
-
-        codes = [
-            line.strip()
-            for line in lines[:header_index]
-            if re.fullmatch(r"\d{4}", line.strip())
-        ]
-        if len(codes) < 5:
+            i = j
             continue
 
         descriptions: list[str] = []
-        for raw in lines[header_index + 1 :]:
+        k = header_index + 1
+        while k < len(lines) and len(descriptions) < len(codes):
+            raw = lines[k]
             line = clean_description(raw)
+            k += 1
             if not line:
                 continue
             if re.fullmatch(r"\d{4}", line):
@@ -533,26 +554,30 @@ def san_antonio_column_rows(text: str) -> dict[str, str]:
             desc = clean_reference_description(line, "san-antonio-pcard")
             if len(desc) >= 3:
                 descriptions.append(desc)
-            if len(descriptions) >= len(codes):
-                break
 
         if len(descriptions) != len(codes):
             raise RuntimeError(
-                f"san-antonio-pcard column page {page_no} has "
-                f"{len(codes)} MCCs but {len(descriptions)} descriptions"
+                "san-antonio-pcard column block beginning with "
+                f"{codes[0]} has {len(codes)} MCCs but "
+                f"{len(descriptions)} descriptions"
             )
 
         for code, desc in zip(codes, descriptions):
             previous = recovered.get(code)
-            if (
-                previous
-                and canonical_description(previous) != canonical_description(desc)
-            ):
-                raise RuntimeError(
-                    f"san-antonio-pcard column conflict for MCC {code}: "
-                    f"{previous!r} vs {desc!r}"
-                )
-            recovered[code] = desc
+            if previous:
+                a = canonical_description(previous)
+                b = canonical_description(desc)
+                if a != b and a not in b and b not in a:
+                    raise RuntimeError(
+                        f"san-antonio-pcard column conflict for MCC {code}: "
+                        f"{previous!r} vs {desc!r}"
+                    )
+                if len(desc) > len(previous):
+                    recovered[code] = desc
+            else:
+                recovered[code] = desc
+
+        i = max(k, j)
 
     return recovered
 
