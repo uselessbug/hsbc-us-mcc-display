@@ -45,6 +45,8 @@ MIN_REFERENCE_ENTRIES = {
     "florida-dfs": 850,
 }
 MIN_REFERENCE_OVERLAP = 800
+MIN_SAN_ANTONIO_OVERLAP_RATIO = 0.95
+MIN_FLORIDA_OVERLAP_RATIO = 0.85
 MIN_GLOBAL_AB_CODES = 1005
 MIN_NAMED_INDUSTRY_CODES = 400
 SECONDARY_AGREEMENT = 0.82
@@ -96,6 +98,7 @@ REFERENCE_SENTINELS = {
     "5812": ("restaurant", "eating"),
     "6536": ("moneysend", "money send"),
     "6555": ("rebate", "reward"),
+    "9401": ("purchasing", "pilot"),
 }
 
 RANGES = (
@@ -298,7 +301,8 @@ def parse_extended_titles(text: str) -> dict[str, str]:
     lines = text.splitlines()
     result: dict[str, str] = {}
     start_re = re.compile(
-        r"^\s*Description\s+of\s+MCC\s+(\d{4})\s*:\s*(.*?)\s*$",
+        r"^\s*(?:Description|Decription|Descriptoin)\s+of\s+MCC\s+"
+        r"(\d{4})\s*:\s*(.*?)\s*$",
         re.IGNORECASE,
     )
 
@@ -490,11 +494,96 @@ def clean_reference_description(desc: str, source: str) -> str:
 
 
 def san_antonio_column_rows(text: str) -> dict[str, str]:
-    """Recover San Antonio column blocks independent of PDF page boundaries."""
+    """Recover both column encodings used by the San Antonio PDF.
+
+    Observed layouts:
+    A) MCC block -> combined/header line -> description block
+    B) combined/header line -> MCC block -> description block
+
+    Direct row-oriented pages are handled separately by
+    extract_institutional_reference().
+    """
     lines = text.splitlines()
     recovered: dict[str, str] = {}
-    i = 0
 
+    def structural(line: str) -> bool:
+        normalized = clean_description(line)
+        return (
+            not normalized
+            or normalized.startswith("MERCHANT CATEGORY")
+            or normalized.startswith("CODE (MCC)")
+            or normalized.startswith("I I I")
+            or normalized.startswith('"INCLUDE" indicates')
+            or normalized.startswith("MCC is not restricted")
+            or re.match(r"^Page \d+ of \d+", normalized) is not None
+        )
+
+    def add_pairs(codes: list[str], descriptions: list[str], label: str) -> None:
+        if len(codes) != len(descriptions):
+            raise RuntimeError(
+                f"san-antonio-pcard {label} has {len(codes)} MCCs but "
+                f"{len(descriptions)} descriptions"
+            )
+        for code, desc in zip(codes, descriptions):
+            previous = recovered.get(code)
+            if previous:
+                a = canonical_description(previous)
+                b = canonical_description(desc)
+                if a != b and a not in b and b not in a:
+                    raise RuntimeError(
+                        f"san-antonio-pcard column conflict for MCC {code}: "
+                        f"{previous!r} vs {desc!r}"
+                    )
+                if len(desc) > len(previous):
+                    recovered[code] = desc
+            else:
+                recovered[code] = desc
+
+    def collect_descriptions(start_at: int, count: int) -> tuple[list[str], int]:
+        descriptions: list[str] = []
+        k = start_at
+        while k < len(lines) and len(descriptions) < count:
+            raw = lines[k]
+            k += 1
+            line = clean_description(raw)
+            if structural(raw) or re.fullmatch(r"\d{4}", line):
+                continue
+            desc = clean_reference_description(line, "san-antonio-pcard")
+            if len(desc) >= 3:
+                descriptions.append(desc)
+        return descriptions, k
+
+    # Layout B: header -> MCC column -> description column.
+    for h, raw in enumerate(lines):
+        header = clean_description(raw).upper()
+        if "MCC DESCRIPTION" not in header or "MCC" not in header:
+            continue
+
+        k = h + 1
+        while k < len(lines) and structural(lines[k]):
+            k += 1
+
+        codes: list[str] = []
+        while k < len(lines):
+            stripped = lines[k].strip()
+            if re.fullmatch(r"\d{4}", stripped):
+                codes.append(stripped)
+                k += 1
+                continue
+            if not stripped:
+                k += 1
+                continue
+            break
+
+        if len(codes) < 5:
+            continue
+
+        descriptions, _ = collect_descriptions(k, len(codes))
+        if len(descriptions) == len(codes):
+            add_pairs(codes, descriptions, f"header-first block near line {h + 1}")
+
+    # Layout A: MCC column -> header -> description column.
+    i = 0
     while i < len(lines):
         if not re.fullmatch(r"\s*\d{4}\s*", lines[i]):
             i += 1
@@ -517,9 +606,6 @@ def san_antonio_column_rows(text: str) -> dict[str, str]:
             i = max(i + 1, j)
             continue
 
-        # In this PDF the MCC column can be emitted as a block before the
-        # description column. The description header follows shortly after the
-        # code block, but need not be a standalone line.
         header_index = next(
             (
                 k
@@ -532,52 +618,9 @@ def san_antonio_column_rows(text: str) -> dict[str, str]:
             i = j
             continue
 
-        descriptions: list[str] = []
-        k = header_index + 1
-        while k < len(lines) and len(descriptions) < len(codes):
-            raw = lines[k]
-            line = clean_description(raw)
-            k += 1
-            if not line:
-                continue
-            if re.fullmatch(r"\d{4}", line):
-                continue
-            if (
-                line.startswith("MERCHANT CATEGORY")
-                or line.startswith("CODE (MCC)")
-                or line.startswith("I I I")
-                or line.startswith('"INCLUDE" indicates')
-                or line.startswith("MCC is not restricted")
-                or re.match(r"^Page \d+ of \d+", line)
-            ):
-                continue
-
-            desc = clean_reference_description(line, "san-antonio-pcard")
-            if len(desc) >= 3:
-                descriptions.append(desc)
-
-        if len(descriptions) != len(codes):
-            raise RuntimeError(
-                "san-antonio-pcard column block beginning with "
-                f"{codes[0]} has {len(codes)} MCCs but "
-                f"{len(descriptions)} descriptions"
-            )
-
-        for code, desc in zip(codes, descriptions):
-            previous = recovered.get(code)
-            if previous:
-                a = canonical_description(previous)
-                b = canonical_description(desc)
-                if a != b and a not in b and b not in a:
-                    raise RuntimeError(
-                        f"san-antonio-pcard column conflict for MCC {code}: "
-                        f"{previous!r} vs {desc!r}"
-                    )
-                if len(desc) > len(previous):
-                    recovered[code] = desc
-            else:
-                recovered[code] = desc
-
+        descriptions, k = collect_descriptions(header_index + 1, len(codes))
+        if len(descriptions) == len(codes):
+            add_pairs(codes, descriptions, f"codes-first block near line {i + 1}")
         i = max(k, j)
 
     return recovered
@@ -680,6 +723,19 @@ def validate_reference_pair(
         raise RuntimeError(
             f"Institutional MCC overlap dropped to {len(overlap)}; "
             f"expected at least {MIN_REFERENCE_OVERLAP}"
+        )
+
+    san_ratio = len(overlap) / len(san_antonio)
+    florida_ratio = len(overlap) / len(florida)
+    if san_ratio < MIN_SAN_ANTONIO_OVERLAP_RATIO:
+        raise RuntimeError(
+            f"San Antonio overlap ratio dropped to {san_ratio:.1%}; "
+            f"expected at least {MIN_SAN_ANTONIO_OVERLAP_RATIO:.0%}"
+        )
+    if florida_ratio < MIN_FLORIDA_OVERLAP_RATIO:
+        raise RuntimeError(
+            f"Florida DFS overlap ratio dropped to {florida_ratio:.1%}; "
+            f"expected at least {MIN_FLORIDA_OVERLAP_RATIO:.0%}"
         )
 
 
