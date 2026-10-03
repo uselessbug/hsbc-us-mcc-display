@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HSBC US Credit Card MCC Display
 // @namespace    https://github.com/uselessbug/hsbc-us-mcc-display
-// @version      4.1.0
+// @version      4.2.0
 // @description  Show Mastercard MCC beside posted HSBC US credit-card transactions.
 // @homepageURL  https://github.com/uselessbug/hsbc-us-mcc-display
 // @supportURL   https://github.com/uselessbug/hsbc-us-mcc-display/issues
@@ -31,6 +31,24 @@
         modified: 'hsbcMcc.mastercardDb.lastModified',
         success: 'hsbcMcc.mastercardDb.lastSuccess',
         attempt: 'hsbcMcc.mastercardDb.lastAttempt',
+    });
+
+    // FirstData exposes ISO 4217 numeric codes. Keep the common HSBC US travel
+    // currencies compact; fall back to FirstData's own currency-name record.
+    const CURRENCY_ALPHA = Object.freeze({
+        '036': 'AUD',
+        '124': 'CAD',
+        '156': 'CNY',
+        '344': 'HKD',
+        '392': 'JPY',
+        '410': 'KRW',
+        '446': 'MOP',
+        '702': 'SGD',
+        '764': 'THB',
+        '826': 'GBP',
+        '840': 'USD',
+        '901': 'TWD',
+        '978': 'EUR',
     });
 
     const posted = new Map();
@@ -90,7 +108,8 @@
         const desc = row.querySelector('td.desc_column');
         const type = row.querySelector('td.type_column');
         const amount = row.querySelector('.trans_amt');
-        if (!date || !desc || !type || !amount) return null;
+        const amountCell = amount?.closest('td');
+        if (!date || !desc || !type || !amount || !amountCell) return null;
 
         const clone = type.cloneNode(true);
         clone.querySelectorAll('[data-hsbc-mcc-role]').forEach((node) => node.remove());
@@ -100,20 +119,80 @@
             type: clone.textContent.trim(),
             amount: amount.textContent.trim(),
             cell: type,
+            amountCell,
+        };
+    }
+
+    function extractFx(group, visible) {
+        const auxiliaries = group.filter((tx) => !tx?.transactionCode?.display);
+        if (!auxiliaries.length) return null;
+
+        let originalAmount = null;
+        let exchangeRate = null;
+        let currencyName = null;
+
+        for (const tx of auxiliaries) {
+            const description = String(tx?.description ?? '');
+            const rate = description.match(/([+-]?\d[\d,]*(?:\.\d+)?)\s*X\s*([0-9]+(?:\.\d+)?)/i);
+            if (rate) {
+                originalAmount = rate[1];
+                exchangeRate = rate[2];
+                continue;
+            }
+
+            const merchant = String(tx?.merchantDescription ?? '').replace(/\s+/g, ' ').trim();
+            if (merchant && !/^[-+]?\d/.test(merchant)) currencyName = merchant;
+        }
+
+        if (!originalAmount) return null;
+
+        const numeric = String(visible?.currencyCode ?? '').trim().padStart(3, '0');
+        const currency = CURRENCY_ALPHA[numeric] ?? currencyName ?? numeric;
+        if (!currency) return null;
+
+        if (Number(visible?.transactionAmount) < 0 && !originalAmount.startsWith('-')) {
+            originalAmount = `-${originalAmount}`;
+        }
+
+        return {
+            currency,
+            currencyCode: numeric,
+            currencyName,
+            originalAmount,
+            exchangeRate,
         };
     }
 
     function processPosted(payload) {
         const list = Array.isArray(payload?.transactions) ? payload.transactions : [];
         const next = new Map();
+        const groups = new Map();
 
+        for (const tx of list) {
+            const id = String(tx?.transactionId ?? '');
+            if (!id) continue;
+            const group = groups.get(id) ?? [];
+            group.push(tx);
+            groups.set(id, group);
+        }
+
+        // Preserve the visible API order. For duplicate signatures HSBC's DOM
+        // preserves the same within-day order, so draw() can consume each bucket
+        // one occurrence at a time.
         for (const tx of list) {
             if (!tx?.transactionCode?.display) continue; // skip FX auxiliary rows
             const key = apiSignature(tx);
             const mcc = normMcc(tx?.merchantCategoryCode);
             if (!key || !mcc) continue;
+
+            const id = String(tx?.transactionId ?? '');
+            const group = (id && groups.get(id)) || [tx];
             const bucket = next.get(key) ?? [];
-            bucket.push({ id: String(tx?.transactionId ?? ''), mcc });
+            bucket.push({
+                id,
+                mcc,
+                fx: extractFx(group, tx),
+            });
             next.set(key, bucket);
         }
 
@@ -172,7 +251,13 @@
         cell.querySelectorAll('[data-hsbc-mcc-role]').forEach((node) => node.remove());
         delete cell.dataset.hsbcMcc;
         delete cell.dataset.hsbcMccSignature;
+        delete cell.dataset.hsbcMccTransactionId;
         delete cell.dataset.hsbcMccAmbiguous;
+    }
+
+    function removeFx(cell) {
+        cell.querySelectorAll('[data-hsbc-fx-role]').forEach((node) => node.remove());
+        delete cell.dataset.hsbcFxTransactionId;
     }
 
     function titleFor(mcc) {
@@ -191,7 +276,8 @@
         return tag;
     }
 
-    function syncTags(cell, mcc, key) {
+    function syncTags(cell, tx, key) {
+        const { mcc } = tx;
         const desktop = cell.querySelector('[data-hsbc-mcc-role="desktop"]');
         const mobile = cell.querySelector('[data-hsbc-mcc-role="mobile"]');
         if (cell.dataset.hsbcMcc === mcc && desktop && mobile) {
@@ -207,26 +293,62 @@
         cell.appendChild(makeTag(mcc, 'mobile'));
         cell.dataset.hsbcMcc = mcc;
         cell.dataset.hsbcMccSignature = key;
+        cell.dataset.hsbcMccTransactionId = tx.id;
+    }
+
+    function syncFx(cell, tx) {
+        const fx = tx.fx;
+        if (!fx?.originalAmount) {
+            removeFx(cell);
+            return;
+        }
+
+        const text = `${fx.currency} ${fx.originalAmount}`;
+        const existing = cell.querySelector('[data-hsbc-fx-role="original"]');
+        if (existing && cell.dataset.hsbcFxTransactionId === tx.id && existing.textContent === text) return;
+
+        removeFx(cell);
+        const amount = cell.querySelector('.trans_amt');
+        if (!amount) return;
+
+        const original = document.createElement('span');
+        original.className = 'hsbc-original-amount';
+        original.dataset.hsbcFxRole = 'original';
+        original.textContent = text;
+
+        const details = [
+            `Original amount: ${text}`,
+            fx.exchangeRate ? `Exchange rate: ${fx.exchangeRate}` : null,
+            fx.currencyName && fx.currencyName !== fx.currency ? fx.currencyName : null,
+        ].filter(Boolean).join('. ');
+        original.setAttribute('aria-label', details);
+
+        amount.insertAdjacentElement('afterend', original);
+        cell.dataset.hsbcFxTransactionId = tx.id;
     }
 
     function draw() {
+        // Rebuild occurrence queues on every draw. This makes redraws idempotent
+        // while still pairing duplicate signature rows one-to-one.
+        const queues = new Map(
+            [...posted].map(([key, bucket]) => [key, bucket.slice()])
+        );
+
         for (const row of document.querySelectorAll('#acc_table tr.account_pg_new')) {
             const p = rowParts(row);
             if (!p) continue;
             const key = signature(p.date, p.amount, p.type, p.desc);
-            const bucket = key ? posted.get(key) : null;
-            if (!bucket?.length) {
+            const queue = key ? queues.get(key) : null;
+            const tx = queue?.shift();
+
+            if (!tx) {
                 removeTags(p.cell);
+                removeFx(p.amountCell);
                 continue;
             }
 
-            const mccs = [...new Set(bucket.map((tx) => tx.mcc))];
-            if (mccs.length !== 1) {
-                removeTags(p.cell);
-                p.cell.dataset.hsbcMccAmbiguous = 'true';
-                continue;
-            }
-            syncTags(p.cell, mccs[0], key);
+            syncTags(p.cell, tx, key);
+            syncFx(p.amountCell, tx);
         }
     }
 
@@ -248,6 +370,7 @@
             .hsbc-mcc-tag{color:#db0011;cursor:help;font-size:.92em;font-weight:600;white-space:nowrap}
             .hsbc-mcc-desktop{display:none}
             .hsbc-mcc-mobile{display:inline;margin-left:6px}
+            .hsbc-original-amount{display:block;margin-top:2px;color:#666;font-size:.78em;font-weight:400;line-height:1.2;white-space:nowrap}
             @media (min-width:770px){.hsbc-mcc-desktop{display:inline;margin-right:8px}.hsbc-mcc-mobile{display:none}}
             #hsbc-mcc-tooltip{position:fixed;z-index:2147483647;display:none;max-width:360px;padding:7px 9px;border:1px solid rgba(0,0,0,.18);border-radius:4px;background:#fff;color:#222;box-shadow:0 2px 8px rgba(0,0,0,.18);font:12px/1.4 Arial,sans-serif;pointer-events:none}
             #hsbc-mcc-tooltip b{display:block}
