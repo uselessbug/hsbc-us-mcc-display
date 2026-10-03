@@ -28,15 +28,20 @@ The published database is:
 
 https://raw.githubusercontent.com/uselessbug/hsbc-us-mcc-display/main/data/mcc-mastercard.json
 
-`data/mcc-mastercard.json` is generated from Mastercard's official **Quick Reference Booklet - Merchant Edition**. The updater downloads the official PDF, extracts its text with Poppler, combines the general MCC headings with Mastercard's industry-specific airline/car-rental/lodging code tables, validates known codes and the overall entry count, then emits deterministic JSON.
+`data/mcc-mastercard.json` is generated primarily from Mastercard's official **Quick Reference Booklet - Merchant Edition**. The updater extracts the extended MCC headings, industry-specific airline/car-rental/lodging tables, and Mastercard's global AB-program listing. Public institutional MCC lists from the City of San Antonio P-Card program and Florida DFS are used only as secondary references for QRB-referenced codes that still lack a description; they never overwrite a Mastercard description. The build also writes `data/mcc-source-report.json` so source/provenance decisions can be audited.
 
 The database is intentionally separate from the userscript. Updating MCC descriptions therefore does not require a new userscript release.
 
 A scheduled GitHub Actions workflow checks the Mastercard source weekly. It commits only when the generated JSON actually changes. Changes to the updater or its workflow also trigger a build, so a fresh repository populates the bootstrap database automatically.
 
-Official source:
+Primary source:
 
 https://www.mastercard.com/content/dam/mccom/shared/business/support/rules-pdfs/mastercard-quick-reference-booklet-merchant.pdf
+
+Secondary institutional references:
+
+- https://www.sanantonio.gov/Portals/0/Files/Purchasing/PCard/MerchantCategoryCodes.pdf
+- https://fs.fldfs.com/iwpapps/pcard/docs/MCCs.pdf
 
 ## Privacy
 
