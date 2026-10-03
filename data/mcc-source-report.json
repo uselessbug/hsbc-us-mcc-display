@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "version": "2026-06-02",
+  "sources": {
+    "mastercardQrb": "https://www.mastercard.com/content/dam/mccom/shared/business/support/rules-pdfs/mastercard-quick-reference-booklet-merchant.pdf",
+    "sanAntonioPcard": "https://www.sanantonio.gov/Portals/0/Files/Purchasing/PCard/MerchantCategoryCodes.pdf",
+    "floridaDfsPcard": "https://fs.fldfs.com/iwpapps/pcard/docs/MCCs.pdf"
+  },
+  "counts": {
+    "published": 1301,
+    "mastercardGlobalAbReferenced": 991,
+    "sanAntonioReference": 919,
+    "floridaDfsReference": 951,
+    "mastercardAbProgramAdditions": 1,
+    "secondaryConsensusAdditions": 1,
+    "secondaryConsensusNotInCurrentMastercard": 8
+  },
+  "mastercardAbProgramAdditions": {
+    "6555": {
+      "description": "Mastercard Initiated Rebate/Reward",
+      "source": "mastercard-qrb-ab-program",
+      "program": "I001",
+      "corroboratedBy": [
+        "san-antonio-pcard",
+        "florida-dfs"
+      ]
+    }
+  },
+  "secondaryConsensusAdditions": {
+    "9401": {
+      "description": "I-PURCHASING PILOT",
+      "sanAntonio": "I-PURCHASING PILOT",
+      "floridaDfs": "I-PURCHASING PILOT"
+    }
+  },
+  "secondaryConsensusNotInCurrentMastercard": {
+    "6381": {
+      "sanAntonio": "INSURANCE PREMIUMS",
+      "floridaDfs": "INSURANCE PREMIUMS"
+    },
+    "6529": {
+      "sanAntonio": "REMOTE STORED VALUE LOAD - MEMBER FIN INSTITUTION",
+      "floridaDfs": "REMOTE STORED VALUE LOAD-MEMBER FINANCIAL INSTITUTION"
+    },
+    "6530": {
+      "sanAntonio": "REMOTE STORED VALUE LOAD - MERCHANT",
+      "floridaDfs": "REMOTE STORED VALUE LOAD"
+    },
+    "6535": {
+      "sanAntonio": "VALUE PURCHASE-MEMBER FINANCIAL INSTITUTIONS",
+      "floridaDfs": "VALUE PURCHASE-MEMBER FINANCIAL INSTITUT"
+    },
+    "9700": {
+      "sanAntonio": "AUTOMATED REFERRAL SERVICE",
+      "floridaDfs": "AUTOMATED REFERRAL SERVICE"
+    },
+    "9701": {
+      "sanAntonio": "VISA CREDENTIAL SERVER",
+      "floridaDfs": "VISA CREDENTIAL SERVER"
+    },
+    "9752": {
+      "sanAntonio": "GAS/AUTOMOTIVE/U.K. PETROL STATIONS-ELECTRONIC HOT FILE",
+      "floridaDfs": "U.K. PETROL STATIONS, ELECTRONIC HOT FILE"
+    },
+    "9754": {
+      "sanAntonio": "GAMBLING-HORSE RACING, DOG RACING, LOTTERIES",
+      "floridaDfs": "GAMBLING-HORSE, DOG RACING-ST LOTTERY"
+    }
+  }
+}
