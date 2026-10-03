@@ -138,10 +138,11 @@ def download(url: str, path: Path) -> None:
     path.write_bytes(data)
 
 
-def pdf_text(pdf: Path, output: Path) -> str:
+def pdf_text(pdf: Path, output: Path, *, layout: bool = True) -> str:
     if not shutil.which("pdftotext"):
         raise RuntimeError("pdftotext is required (install poppler-utils)")
-    run("pdftotext", "-layout", str(pdf), str(output))
+    mode = "-layout" if layout else "-raw"
+    run("pdftotext", mode, str(pdf), str(output))
     return output.read_text(encoding="utf-8", errors="replace")
 
 
@@ -870,7 +871,11 @@ def main() -> int:
             txt = root / f"{name}.txt"
             print(f"Downloading {url}")
             download(url, pdf)
-            texts[name] = pdf_text(pdf, txt)
+            texts[name] = pdf_text(
+                pdf,
+                txt,
+                layout=(name != "san-antonio"),
+            )
 
         version = document_date(texts["mastercard"])
         entries, provenance, global_codes, country_codes = extract_mastercard(
