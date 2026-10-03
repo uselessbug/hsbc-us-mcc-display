@@ -9,7 +9,6 @@ on:
       - main
     paths:
       - 'scripts/update_mcc.py'
-      - 'requirements.txt'
       - '.github/workflows/update-mcc.yml'
 
 permissions:
@@ -30,8 +29,6 @@ jobs:
           python-version: '3.12'
       - name: Install Poppler
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
-      - name: Install Python dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Rebuild MCC database from Mastercard source
         run: python scripts/update_mcc.py
       - name: Validate generated JSON
