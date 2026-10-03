@@ -27,7 +27,6 @@ KNOWN = {
     "4121": ("taxi", "limousine"),
     "4511": ("air",),
     "5812": ("restaurant", "eating"),
-    "6555": ("rebate", "reward"),
     "7011": ("hotel", "motel", "lodging"),
 }
 
