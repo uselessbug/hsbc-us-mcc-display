@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HSBC US Credit Card MCC Display
 // @namespace    https://github.com/uselessbug/hsbc-us-mcc-display
-// @version      4.3.0
+// @version      4.3.2
 // @description  Show posted Mastercard MCCs and locally predict pending MCCs from merchant history.
 // @homepageURL  https://github.com/uselessbug/hsbc-us-mcc-display
 // @supportURL   https://github.com/uselessbug/hsbc-us-mcc-display/issues
@@ -593,7 +593,7 @@
             .hsbc-mcc-tag{color:#db0011;cursor:help;font-size:.92em;font-weight:600;white-space:nowrap}
             .hsbc-mcc-desktop{display:none}
             .hsbc-mcc-mobile{display:inline;margin-left:6px}
-            .hsbc-mcc-predicted{font-style:italic;opacity:.68}
+            .hsbc-mcc-predicted{font-style:italic;opacity:.68;pointer-events:auto!important}
             .hsbc-original-amount{display:block;margin-top:2px;color:#666;font-size:.78em;font-weight:400;line-height:1.2;white-space:nowrap}
             @media (min-width:770px){.hsbc-mcc-desktop{display:inline;margin-right:8px}.hsbc-mcc-mobile{display:none}}
             #hsbc-mcc-tooltip{position:fixed;z-index:2147483647;display:none;max-width:360px;padding:7px 9px;border:1px solid rgba(0,0,0,.18);border-radius:4px;background:#fff;color:#222;box-shadow:0 2px 8px rgba(0,0,0,.18);font:12px/1.4 Arial,sans-serif;pointer-events:none}
