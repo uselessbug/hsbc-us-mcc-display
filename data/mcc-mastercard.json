@@ -6,7 +6,11 @@
     "document": "Quick Reference Booklet - Merchant Edition",
     "url": "https://www.mastercard.com/content/dam/mccom/shared/business/support/rules-pdfs/mastercard-quick-reference-booklet-merchant.pdf",
     "documentDate": "2026-06-02",
-    "method": "official-pdf-text"
+    "method": "official-pdf-text+global-ab-programs",
+    "secondaryReferences": [
+      "https://www.sanantonio.gov/Portals/0/Files/Purchasing/PCard/MerchantCategoryCodes.pdf",
+      "https://fs.fldfs.com/iwpapps/pcard/docs/MCCs.pdf"
+    ]
   },
   "mcc": {
     "0742": "Veterinary Services",
@@ -1195,6 +1199,7 @@
     "6537": "MoneySend Intercountry",
     "6538": "Funding Transactions for MoneySend",
     "6540": "Funding Transactions",
+    "6555": "Mastercard Initiated Rebate/Reward",
     "7011": "Lodging: Hotels, Motels, Resorts: not elsewhere",
     "7012": "Timeshares",
     "7032": "Recreational and Sporting Camps",
@@ -1305,6 +1310,7 @@
     "9223": "Bail and Bond Payments",
     "9311": "Tax Payments",
     "9399": "Government Services: not elsewhere classified",
+    "9401": "I-PURCHASING PILOT",
     "9402": "Postal Services: Government Only",
     "9405": "Intra-Government Purchases: Government Only",
     "9406": "Government-owned Lottery (global, excluding U.S."
