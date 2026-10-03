@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "version": "bootstrap",
+  "source": {
+    "network": "Mastercard",
+    "document": "Quick Reference Booklet - Merchant Edition",
+    "url": "https://www.mastercard.com/content/dam/mccom/shared/business/support/rules-pdfs/mastercard-quick-reference-booklet-merchant.pdf",
+    "documentDate": null,
+    "worksheet": null
+  },
+  "mcc": {}
+}
