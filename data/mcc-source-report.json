@@ -7,17 +7,17 @@
     "floridaDfsPcard": "https://fs.fldfs.com/iwpapps/pcard/docs/MCCs.pdf"
   },
   "counts": {
-    "published": 1302,
+    "published": 1301,
     "qrbGlobalAbReferenced": 1155,
     "qrbCountrySpecificAbReferenced": 1624,
     "qrbAnyAbReferenced": 1624,
-    "qrbReferencedWithoutDescription": 325,
+    "qrbReferencedWithoutDescription": 326,
     "sanAntonioReference": 920,
     "floridaDfsReference": 951,
     "institutionalReferenceOverlap": 910,
     "mastercardAbProgramAdditions": 1,
-    "secondaryConsensusAdditions": 2,
-    "secondaryConsensusNotInPublishedDb": 11
+    "secondaryConsensusAdditions": 1,
+    "secondaryConsensusNotInPublishedDb": 12
   },
   "mastercardAbProgramAdditions": {
     "6555": {
@@ -35,11 +35,6 @@
       "description": "I-PURCHASING PILOT",
       "sanAntonio": "I-PURCHASING PILOT",
       "floridaDfs": "I-PURCHASING PILOT"
-    },
-    "9702": {
-      "description": "GCAS EMERGENCY SERVICES",
-      "sanAntonio": "GCAS EMERGENCY SERVICES",
-      "floridaDfs": "GCAS EMERGENCY SERVICES (VISA USE ONLY)"
     }
   },
   "qrbReferencedWithoutDescription": [
@@ -366,6 +361,7 @@
     "8412",
     "8666",
     "9407",
+    "9702",
     "9753",
     "9950"
   ],
@@ -405,6 +401,10 @@
     "9701": {
       "sanAntonio": "VISA CREDENTIAL SERVER",
       "floridaDfs": "VISA CREDENTIAL SERVER"
+    },
+    "9702": {
+      "sanAntonio": "GCAS EMERGENCY SERVICES",
+      "floridaDfs": "GCAS EMERGENCY SERVICES (VISA USE ONLY)"
     },
     "9752": {
       "sanAntonio": "GAS/AUTOMOTIVE/U.K. PETROL STATIONS-ELECTRONIC HOT FILE",
