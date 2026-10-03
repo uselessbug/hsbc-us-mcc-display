@@ -9,9 +9,9 @@
   "counts": {
     "published": 1301,
     "qrbGlobalAbReferenced": 1155,
-    "qrbCountrySpecificAbReferenced": 1624,
-    "qrbAnyAbReferenced": 1624,
-    "qrbReferencedWithoutDescription": 326,
+    "qrbCountrySpecificAbReferenced": 1507,
+    "qrbAnyAbReferenced": 1564,
+    "qrbReferencedWithoutDescription": 325,
     "sanAntonioReference": 920,
     "floridaDfsReference": 951,
     "institutionalReferenceOverlap": 910,
@@ -40,7 +40,6 @@
   "qrbReferencedWithoutDescription": [
     "0743",
     "0744",
-    "1240",
     "1332",
     "1333",
     "1334",
