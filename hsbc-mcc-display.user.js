@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         HSBC US Credit Card MCC Display
 // @namespace    https://github.com/uselessbug/hsbc-us-mcc-display
-// @version      4.2.1
-// @description  Show Mastercard MCC beside posted HSBC US credit-card transactions.
+// @version      4.3.0
+// @description  Show posted Mastercard MCCs and locally predict pending MCCs from merchant history.
 // @homepageURL  https://github.com/uselessbug/hsbc-us-mcc-display
 // @supportURL   https://github.com/uselessbug/hsbc-us-mcc-display/issues
 // @downloadURL  https://raw.githubusercontent.com/uselessbug/hsbc-us-mcc-display/main/hsbc-mcc-display.user.js
@@ -23,6 +23,9 @@
 
     const DB_URL = 'https://raw.githubusercontent.com/uselessbug/hsbc-us-mcc-display/main/data/mcc-mastercard.json';
     const DB_SCHEMA = 1;
+    const HISTORY_SCHEMA = 1;
+    const HISTORY_MAX_MERCHANTS = 1200;
+    const HISTORY_MAX_SEEN = 4000;
     const REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
     const RETRY_MS = 6 * 60 * 60 * 1000;
     const STORE = Object.freeze({
@@ -31,6 +34,7 @@
         modified: 'hsbcMcc.mastercardDb.lastModified',
         success: 'hsbcMcc.mastercardDb.lastSuccess',
         attempt: 'hsbcMcc.mastercardDb.lastAttempt',
+        history: 'hsbcMcc.merchantHistory',
     });
 
     // FirstData exposes ISO 4217 numeric codes. Keep the common HSBC US travel
@@ -52,6 +56,7 @@
     });
 
     const posted = new Map();
+    let merchantHistory = emptyHistory();
     let mccDb = Object.create(null);
     let mccMeta = null;
     let drawPending = false;
@@ -62,6 +67,165 @@
 
     function normDesc(value) {
         return String(value ?? '').normalize('NFKC').replace(/[^\p{L}\p{N}]/gu, '').toUpperCase();
+    }
+
+    function merchantKey(value) {
+        return String(value ?? '')
+            .normalize('NFKC')
+            .toUpperCase()
+            .replace(/[^\p{L}\p{N}]+/gu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function emptyHistory() {
+        return {
+            schemaVersion: HISTORY_SCHEMA,
+            merchants: Object.create(null),
+            seen: Object.create(null),
+        };
+    }
+
+    function validHistory(history) {
+        return Boolean(
+            history
+            && history.schemaVersion === HISTORY_SCHEMA
+            && history.merchants
+            && typeof history.merchants === 'object'
+            && !Array.isArray(history.merchants)
+            && history.seen
+            && typeof history.seen === 'object'
+            && !Array.isArray(history.seen)
+        );
+    }
+
+    function loadMerchantHistory() {
+        const raw = GM_getValue(STORE.history, '');
+        if (!raw) return;
+        try {
+            const history = JSON.parse(raw);
+            if (validHistory(history)) merchantHistory = history;
+        } catch (error) {
+            log('Ignoring invalid merchant history:', error);
+        }
+    }
+
+    function saveMerchantHistory() {
+        GM_setValue(STORE.history, JSON.stringify(merchantHistory));
+    }
+
+    function hashText(value) {
+        let hash = 0x811c9dc5;
+        for (let i = 0; i < value.length; i += 1) {
+            hash ^= value.charCodeAt(i);
+            hash = Math.imul(hash, 0x01000193);
+        }
+        return (hash >>> 0).toString(36);
+    }
+
+    function observationKey(tx) {
+        const id = String(tx?.transactionId ?? '').trim();
+        if (id) return hashText(`id:${id}`);
+        const key = apiSignature(tx);
+        return key ? hashText(`sig:${key}`) : null;
+    }
+
+    function pruneMerchantHistory() {
+        const seenEntries = Object.entries(merchantHistory.seen);
+        if (seenEntries.length > HISTORY_MAX_SEEN) {
+            seenEntries
+                .sort((a, b) => Number(b[1]) - Number(a[1]))
+                .slice(HISTORY_MAX_SEEN)
+                .forEach(([key]) => delete merchantHistory.seen[key]);
+        }
+
+        const merchantEntries = Object.entries(merchantHistory.merchants);
+        if (merchantEntries.length > HISTORY_MAX_MERCHANTS) {
+            merchantEntries
+                .sort((a, b) => Number(b[1]?.lastSeen ?? 0) - Number(a[1]?.lastSeen ?? 0))
+                .slice(HISTORY_MAX_MERCHANTS)
+                .forEach(([key]) => delete merchantHistory.merchants[key]);
+        }
+    }
+
+    function learnPostedHistory(list) {
+        let changed = false;
+        const now = Date.now();
+
+        for (const tx of list) {
+            if (!tx?.transactionCode?.display) continue;
+            const mcc = normMcc(tx?.merchantCategoryCode);
+            const merchant = merchantKey(tx?.description);
+            const observation = observationKey(tx);
+            if (!mcc || merchant.length < 4 || !observation || merchantHistory.seen[observation]) continue;
+
+            const record = merchantHistory.merchants[merchant] ?? {
+                counts: Object.create(null),
+                lastSeen: 0,
+            };
+            if (!record.counts || typeof record.counts !== 'object' || Array.isArray(record.counts)) {
+                record.counts = Object.create(null);
+            }
+
+            record.counts[mcc] = (Number(record.counts[mcc]) || 0) + 1;
+            record.lastSeen = now;
+            merchantHistory.merchants[merchant] = record;
+            merchantHistory.seen[observation] = now;
+            changed = true;
+        }
+
+        if (!changed) return;
+        pruneMerchantHistory();
+        saveMerchantHistory();
+        log('Updated merchant MCC history:', Object.keys(merchantHistory.merchants).length, 'merchant descriptions');
+    }
+
+    function predictMcc(description) {
+        const query = merchantKey(description);
+        if (query.length < 4) return null;
+
+        const counts = Object.create(null);
+        let matchedMerchants = 0;
+
+        for (const [merchant, record] of Object.entries(merchantHistory.merchants)) {
+            const matches = merchant === query || merchant.startsWith(`${query} `);
+            if (!matches || !record?.counts) continue;
+
+            matchedMerchants += 1;
+            for (const [mcc, rawCount] of Object.entries(record.counts)) {
+                const count = Number(rawCount) || 0;
+                if (count > 0) counts[mcc] = (counts[mcc] || 0) + count;
+            }
+        }
+
+        const ranked = Object.entries(counts)
+            .filter(([mcc, count]) => normMcc(mcc) && count > 0)
+            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+        if (!ranked.length) return null;
+
+        const total = ranked.reduce((sum, [, count]) => sum + count, 0);
+        const [mcc, hits] = ranked[0];
+        const share = hits / total;
+
+        // One clean historical match is useful but explicitly shown as low
+        // confidence. If several historical MCCs disagree, require a clear
+        // dominant result instead of guessing.
+        if (total > 1 && share < 0.75) return null;
+
+        const confidence = total >= 5 && share >= 0.9
+            ? 'high'
+            : total >= 2 && share >= 0.8
+                ? 'medium'
+                : 'low';
+
+        return {
+            mcc,
+            hits,
+            total,
+            share,
+            confidence,
+            matchedMerchants,
+        };
     }
 
     function normMcc(value) {
@@ -165,6 +329,7 @@
 
     function processPosted(payload) {
         const list = Array.isArray(payload?.transactions) ? payload.transactions : [];
+        learnPostedHistory(list);
         const next = new Map();
         const groups = new Map();
 
@@ -253,6 +418,7 @@
         delete cell.dataset.hsbcMccSignature;
         delete cell.dataset.hsbcMccTransactionId;
         delete cell.dataset.hsbcMccAmbiguous;
+        delete cell.dataset.hsbcMccPredicted;
     }
 
     function removeFx(cell) {
@@ -292,6 +458,59 @@
         cell.dataset.hsbcMcc = mcc;
         cell.dataset.hsbcMccSignature = key;
         cell.dataset.hsbcMccTransactionId = tx.id;
+    }
+
+
+    function pendingRowParts(row) {
+        const desc = row.querySelector('td[data-label="Description"]');
+        const type = row.querySelector('td[data-label="Type"]');
+        if (!desc || !type) return null;
+        return {
+            desc: desc.textContent.trim(),
+            cell: type,
+        };
+    }
+
+    function makePredictedTag(prediction, role) {
+        const tag = makeTag(prediction.mcc, role);
+        tag.classList.add('hsbc-mcc-predicted');
+        tag.dataset.hsbcMccPredicted = '1';
+        tag.dataset.hsbcMccHits = String(prediction.hits);
+        tag.dataset.hsbcMccTotal = String(prediction.total);
+        tag.dataset.hsbcMccConfidence = prediction.confidence;
+        tag.textContent = `~${prediction.mcc}`;
+        tag.setAttribute(
+            'aria-label',
+            `Predicted MCC ${prediction.mcc}. ${prediction.hits}/${prediction.total} matching posted transactions. ${titleFor(prediction.mcc)}`,
+        );
+        return tag;
+    }
+
+    function syncPrediction(cell, prediction) {
+        if (!prediction) {
+            removeTags(cell);
+            return;
+        }
+
+        const desktop = cell.querySelector('[data-hsbc-mcc-role="desktop"]');
+        const mobile = cell.querySelector('[data-hsbc-mcc-role="mobile"]');
+        const same = (
+            cell.dataset.hsbcMcc === prediction.mcc
+            && cell.dataset.hsbcMccPredicted === '1'
+            && desktop
+            && mobile
+            && desktop.dataset.hsbcMccHits === String(prediction.hits)
+            && desktop.dataset.hsbcMccTotal === String(prediction.total)
+        );
+        if (same) return;
+
+        removeTags(cell);
+        const desktopTag = makePredictedTag(prediction, 'desktop');
+        const mobileTag = makePredictedTag(prediction, 'mobile');
+        cell.insertBefore(desktopTag, cell.firstChild);
+        cell.appendChild(mobileTag);
+        cell.dataset.hsbcMcc = prediction.mcc;
+        cell.dataset.hsbcMccPredicted = '1';
     }
 
     function syncFx(cell, tx) {
@@ -348,6 +567,12 @@
             syncTags(p.cell, tx, key);
             syncFx(p.amountCell, tx);
         }
+
+        for (const row of document.querySelectorAll('#transaction-history .pending_table tbody tr')) {
+            const p = pendingRowParts(row);
+            if (!p) continue;
+            syncPrediction(p.cell, predictMcc(p.desc));
+        }
     }
 
     function scheduleDraw() {
@@ -368,6 +593,7 @@
             .hsbc-mcc-tag{color:#db0011;cursor:help;font-size:.92em;font-weight:600;white-space:nowrap}
             .hsbc-mcc-desktop{display:none}
             .hsbc-mcc-mobile{display:inline;margin-left:6px}
+            .hsbc-mcc-predicted{font-style:italic;opacity:.68}
             .hsbc-original-amount{display:block;margin-top:2px;color:#666;font-size:.78em;font-weight:400;line-height:1.2;white-space:nowrap}
             @media (min-width:770px){.hsbc-mcc-desktop{display:inline;margin-right:8px}.hsbc-mcc-mobile{display:none}}
             #hsbc-mcc-tooltip{position:fixed;z-index:2147483647;display:none;max-width:360px;padding:7px 9px;border:1px solid rgba(0,0,0,.18);border-radius:4px;background:#fff;color:#222;box-shadow:0 2px 8px rgba(0,0,0,.18);font:12px/1.4 Arial,sans-serif;pointer-events:none}
@@ -418,12 +644,21 @@
             if (!mcc) return;
 
             const box = ensureTooltip();
+            const predicted = tag.dataset.hsbcMccPredicted === '1';
             const code = document.createElement('b');
-            code.textContent = `MCC ${mcc}`;
+            code.textContent = predicted ? `Predicted MCC ~${mcc}` : `MCC ${mcc}`;
             const desc = document.createElement('div');
             desc.textContent = mccDb[mcc] ?? 'Description unavailable';
             const meta = document.createElement('small');
-            meta.textContent = mccMeta?.version ? `Mastercard MCC DB ${mccMeta.version}` : 'Mastercard MCC DB not loaded';
+            if (predicted) {
+                const hits = Number(tag.dataset.hsbcMccHits) || 0;
+                const total = Number(tag.dataset.hsbcMccTotal) || 0;
+                const confidence = tag.dataset.hsbcMccConfidence || 'low';
+                const percent = total ? Math.round((hits / total) * 100) : 0;
+                meta.textContent = `Prediction only · ${hits}/${total} matching posted transactions (${percent}%, ${confidence} confidence)`;
+            } else {
+                meta.textContent = mccMeta?.version ? `Mastercard MCC DB ${mccMeta.version}` : 'Mastercard MCC DB not loaded';
+            }
             box.replaceChildren(code, desc, meta);
             box.style.display = 'block';
             positionTooltip(tag);
@@ -447,7 +682,7 @@
     function installObserver() {
         const root = document.querySelector('#react-container') ?? document.body;
         if (!root) return;
-        new MutationObserver(() => posted.size && scheduleDraw()).observe(root, { childList: true, subtree: true });
+        new MutationObserver(() => scheduleDraw()).observe(root, { childList: true, subtree: true });
     }
 
     function validDb(db) {
@@ -535,7 +770,15 @@
                 `Version: ${mccMeta?.version || 'not loaded'}`,
                 `Entries: ${Object.keys(mccDb).length}`,
                 `Last successful refresh: ${GM_getValue(STORE.success, 0) ? new Date(GM_getValue(STORE.success, 0)).toLocaleString() : 'never'}`,
+                `Prediction merchant descriptions: ${Object.keys(merchantHistory.merchants).length}`,
+                `Prediction observations: ${Object.keys(merchantHistory.seen).length}`,
             ].join('\n'));
+        });
+        GM_registerMenuCommand('Clear pending MCC prediction history', () => {
+            if (!confirm('Clear locally learned merchant-to-MCC history?')) return;
+            merchantHistory = emptyHistory();
+            saveMerchantHistory();
+            scheduleDraw();
         });
     }
 
@@ -547,6 +790,7 @@
         scheduleDraw();
     }
 
+    loadMerchantHistory();
     installNetworkHook();
     loadCachedDb();
     refreshDb();
