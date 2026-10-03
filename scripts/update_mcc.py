@@ -439,7 +439,7 @@ def extract_mastercard(
 
     country_segment = section(
         text,
-        "Country-specific AB programs with acceptor business codes (MCCs)",
+        "Country-specific AB programs with associated MCCs",
         "Processing exceptions",
     )
     country_programs = parse_ab_programs(country_segment)
