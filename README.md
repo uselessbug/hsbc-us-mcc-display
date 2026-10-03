@@ -28,7 +28,7 @@ The published database is:
 
 https://raw.githubusercontent.com/uselessbug/hsbc-us-mcc-display/main/data/mcc-mastercard.json
 
-`data/mcc-mastercard.json` is generated from Mastercard's official **Quick Reference Booklet - Merchant Edition**. The updater downloads the official PDF, extracts its embedded MCC-listing Excel workbook with Poppler, selects the MCC worksheet, validates several known codes and the overall entry count, then emits deterministic JSON.
+`data/mcc-mastercard.json` is generated from Mastercard's official **Quick Reference Booklet - Merchant Edition**. The updater downloads the official PDF, extracts its text with Poppler, combines the general MCC headings with Mastercard's industry-specific airline/car-rental/lodging code tables, validates known codes and the overall entry count, then emits deterministic JSON.
 
 The database is intentionally separate from the userscript. Updating MCC descriptions therefore does not require a new userscript release.
 
@@ -58,9 +58,8 @@ python -m py_compile scripts/update_mcc.py
 python -m json.tool data/mcc-mastercard.json >/dev/null
 ```
 
-To rebuild the database locally, install Python dependencies plus Poppler (`pdfdetach` and `pdftotext`), then run:
+To rebuild the database locally, install Poppler (`pdftotext`) and run:
 
 ```bash
-python -m pip install -r requirements.txt
 python scripts/update_mcc.py
 ```
