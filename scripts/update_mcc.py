@@ -50,6 +50,13 @@ MIN_FLORIDA_OVERLAP_RATIO = 0.85
 MIN_GLOBAL_AB_CODES = 1005
 MIN_NAMED_INDUSTRY_CODES = 400
 SECONDARY_AGREEMENT = 0.82
+FOREIGN_NETWORK_MARKERS = (
+    "VISA",
+    "AMERICAN EXPRESS",
+    "AMEX",
+    "DISCOVER",
+    "JCB",
+)
 
 INDUSTRY_SENTINELS = {
     "3000": ("united",),
@@ -739,6 +746,11 @@ def validate_reference_pair(
         )
 
 
+def foreign_network_specific(*descriptions: str) -> bool:
+    normalized = " ".join(canonical_description(value) for value in descriptions)
+    return any(marker in normalized for marker in FOREIGN_NETWORK_MARKERS)
+
+
 def apply_secondary_consensus(
     entries: dict[str, str],
     provenance: dict[str, dict[str, str]],
@@ -755,6 +767,8 @@ def apply_secondary_consensus(
         left = san_antonio.get(code)
         right = florida.get(code)
         if not left or not right or not descriptions_agree(left, right):
+            continue
+        if foreign_network_specific(left, right):
             continue
 
         entries[code] = left
