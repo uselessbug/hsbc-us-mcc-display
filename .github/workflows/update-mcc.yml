@@ -32,17 +32,19 @@ jobs:
       - name: Rebuild MCC database from Mastercard source
         run: python scripts/update_mcc.py
       - name: Validate generated JSON
-        run: python -m json.tool data/mcc-mastercard.json >/dev/null
+        run: |
+          python -m json.tool data/mcc-mastercard.json >/dev/null
+          python -m json.tool data/mcc-source-report.json >/dev/null
       - name: Commit update when changed
         shell: bash
         run: |
-          if git diff --quiet -- data/mcc-mastercard.json; then
-            echo "MCC database is unchanged."
+          if git diff --quiet -- data/mcc-mastercard.json data/mcc-source-report.json; then
+            echo "MCC database and source report are unchanged."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/mcc-mastercard.json
+          git add data/mcc-mastercard.json data/mcc-source-report.json
           git commit -m "chore: update Mastercard MCC database"
           git pull --rebase origin main
           git push origin HEAD:main
