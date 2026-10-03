@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HSBC US Credit Card MCC Display
 // @namespace    https://github.com/uselessbug/hsbc-us-mcc-display
-// @version      4.2.0
+// @version      4.2.1
 // @description  Show Mastercard MCC beside posted HSBC US credit-card transactions.
 // @homepageURL  https://github.com/uselessbug/hsbc-us-mcc-display
 // @supportURL   https://github.com/uselessbug/hsbc-us-mcc-display/issues
@@ -271,8 +271,7 @@
         tag.dataset.hsbcMccRole = role;
         tag.dataset.hsbcMcc = mcc;
         tag.textContent = mcc;
-        tag.title = titleFor(mcc);
-        tag.setAttribute('aria-label', tag.title);
+        tag.setAttribute('aria-label', titleFor(mcc));
         return tag;
     }
 
@@ -282,8 +281,7 @@
         const mobile = cell.querySelector('[data-hsbc-mcc-role="mobile"]');
         if (cell.dataset.hsbcMcc === mcc && desktop && mobile) {
             for (const tag of [desktop, mobile]) {
-                tag.title = titleFor(mcc);
-                tag.setAttribute('aria-label', tag.title);
+                tag.setAttribute('aria-label', titleFor(mcc));
             }
             return;
         }
@@ -387,16 +385,30 @@
         return tooltip;
     }
 
-    function positionTooltip(event) {
-        if (!tooltip || tooltip.style.display === 'none') return;
-        const gap = 12;
+    function positionTooltip(anchor) {
+        if (!tooltip || tooltip.style.display === 'none' || !anchor) return;
+
+        const gap = 8;
+        const margin = 8;
+        const a = anchor.getBoundingClientRect();
         const r = tooltip.getBoundingClientRect();
-        let left = event.clientX + gap;
-        let top = event.clientY + gap;
-        if (left + r.width > innerWidth - 8) left = Math.max(8, event.clientX - r.width - gap);
-        if (top + r.height > innerHeight - 8) top = Math.max(8, event.clientY - r.height - gap);
-        tooltip.style.left = `${left}px`;
-        tooltip.style.top = `${top}px`;
+
+        let left = a.left + (a.width - r.width) / 2;
+        left = Math.min(
+            Math.max(margin, left),
+            Math.max(margin, innerWidth - r.width - margin),
+        );
+
+        let top = a.top - r.height - gap;
+        if (top < margin) {
+            top = a.bottom + gap;
+        }
+        if (top + r.height > innerHeight - margin) {
+            top = Math.max(margin, innerHeight - r.height - margin);
+        }
+
+        tooltip.style.left = `${Math.round(left)}px`;
+        tooltip.style.top = `${Math.round(top)}px`;
     }
 
     function installTooltip() {
@@ -414,13 +426,21 @@
             meta.textContent = mccMeta?.version ? `Mastercard MCC DB ${mccMeta.version}` : 'Mastercard MCC DB not loaded';
             box.replaceChildren(code, desc, meta);
             box.style.display = 'block';
-            positionTooltip(event);
+            positionTooltip(tag);
         });
-        document.addEventListener('mousemove', (event) => {
-            if (event.target.closest?.('.hsbc-mcc-tag')) positionTooltip(event);
-        });
+
         document.addEventListener('mouseout', (event) => {
-            if (event.target.closest?.('.hsbc-mcc-tag') && tooltip) tooltip.style.display = 'none';
+            const tag = event.target.closest?.('.hsbc-mcc-tag');
+            if (!tag || !tooltip) return;
+            if (event.relatedTarget && tag.contains(event.relatedTarget)) return;
+            tooltip.style.display = 'none';
+        });
+
+        window.addEventListener('scroll', () => {
+            if (tooltip) tooltip.style.display = 'none';
+        }, true);
+        window.addEventListener('resize', () => {
+            if (tooltip) tooltip.style.display = 'none';
         });
     }
 
