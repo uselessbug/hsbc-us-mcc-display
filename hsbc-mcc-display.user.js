@@ -25,7 +25,6 @@
     const DB_SCHEMA = 1;
     const HISTORY_SCHEMA = 1;
     const HISTORY_MAX_MERCHANTS = 1200;
-    const HISTORY_MAX_SEEN = 4000;
     const REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
     const RETRY_MS = 6 * 60 * 60 * 1000;
     const STORE = Object.freeze({
@@ -56,6 +55,7 @@
     });
 
     const posted = new Map();
+    let postedExport = [];
     let merchantHistory = emptyHistory();
     let mccDb = Object.create(null);
     let mccMeta = null;
@@ -126,19 +126,13 @@
     function observationKey(tx) {
         const id = String(tx?.transactionId ?? '').trim();
         if (id) return hashText(`id:${id}`);
+        const ref = String(tx?.microfilmReferenceNumber ?? '').trim();
+        if (ref) return hashText(`ref:${ref}`);
         const key = apiSignature(tx);
         return key ? hashText(`sig:${key}`) : null;
     }
 
     function pruneMerchantHistory() {
-        const seenEntries = Object.entries(merchantHistory.seen);
-        if (seenEntries.length > HISTORY_MAX_SEEN) {
-            seenEntries
-                .sort((a, b) => Number(b[1]) - Number(a[1]))
-                .slice(HISTORY_MAX_SEEN)
-                .forEach(([key]) => delete merchantHistory.seen[key]);
-        }
-
         const merchantEntries = Object.entries(merchantHistory.merchants);
         if (merchantEntries.length > HISTORY_MAX_MERCHANTS) {
             merchantEntries
@@ -341,30 +335,111 @@
             groups.set(id, group);
         }
 
+        const exportRows = [];
+
         // Preserve the visible API order. For duplicate signatures HSBC's DOM
         // preserves the same within-day order, so draw() can consume each bucket
         // one occurrence at a time.
         for (const tx of list) {
             if (!tx?.transactionCode?.display) continue; // skip FX auxiliary rows
-            const key = apiSignature(tx);
-            const mcc = normMcc(tx?.merchantCategoryCode);
-            if (!key || !mcc) continue;
 
             const id = String(tx?.transactionId ?? '');
+            const ref = String(tx?.microfilmReferenceNumber ?? '').trim();
             const group = (id && groups.get(id)) || [tx];
+            const fx = extractFx(group, tx);
+            const mcc = normMcc(tx?.merchantCategoryCode);
+
+            exportRows.push({
+                transactionDate: tx?.transactionDate ?? '',
+                postDate: tx?.postDate ?? '',
+                ref,
+                transactionAmount: tx?.transactionAmount ?? '',
+                description: tx?.description ?? '',
+                transactionType: tx?.transactionCode?.display ?? '',
+                mcc,
+                fx,
+            });
+
+            const key = apiSignature(tx);
+            if (!key || !mcc) continue;
+
             const bucket = next.get(key) ?? [];
             bucket.push({
                 id,
+                ref,
                 mcc,
-                fx: extractFx(group, tx),
+                fx,
             });
             next.set(key, bucket);
         }
 
         posted.clear();
         for (const [key, bucket] of next) posted.set(key, bucket);
+        postedExport = exportRows;
         log('Loaded posted transactions:', [...next.values()].reduce((n, b) => n + b.length, 0));
         scheduleDraw();
+    }
+
+    function csvCell(value) {
+        return `"${String(value ?? '').replace(/"/g, '""')}"`;
+    }
+
+    function buildPostedCsv() {
+        const rows = [[
+            'Transaction Date',
+            'Posting Date',
+            'Ref#',
+            'Amount',
+            'Description',
+            'Transaction Type',
+            'MCC',
+            'MCC Description',
+            'Original Currency',
+            'Original Amount',
+            'Exchange Rate',
+        ]];
+
+        for (const tx of postedExport) {
+            rows.push([
+                tx.transactionDate,
+                tx.postDate,
+                tx.ref,
+                tx.transactionAmount,
+                tx.description,
+                tx.transactionType,
+                tx.mcc ?? '',
+                tx.mcc ? (mccDb[tx.mcc] ?? '') : '',
+                tx.fx?.currency ?? '',
+                tx.fx?.originalAmount ?? '',
+                tx.fx?.exchangeRate ?? '',
+            ]);
+        }
+
+        return rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
+    }
+
+    function downloadPostedCsv(filename) {
+        const blob = new Blob(['\ufeff', buildPostedCsv()], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename || 'Transactions.csv';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    function installDownloadHook() {
+        document.addEventListener('click', (event) => {
+            const link = event.target.closest?.('a.downbtn[download]');
+            const filename = link?.download ?? '';
+            if (!link || !/^Transactions\.csv$/i.test(filename) || !postedExport.length) return;
+
+            event.preventDefault();
+            downloadPostedCsv(filename);
+        }, true);
     }
 
     function parseXhr(xhr) {
@@ -395,6 +470,7 @@
                 if (isPosted) {
                     const id = ++latestRequest;
                     posted.clear();
+                    postedExport = [];
                     scheduleDraw();
 
                     self.addEventListener('load', () => {
@@ -417,6 +493,7 @@
         delete cell.dataset.hsbcMcc;
         delete cell.dataset.hsbcMccSignature;
         delete cell.dataset.hsbcMccTransactionId;
+        delete cell.dataset.hsbcMccRef;
         delete cell.dataset.hsbcMccAmbiguous;
         delete cell.dataset.hsbcMccPredicted;
     }
@@ -449,6 +526,9 @@
             for (const tag of [desktop, mobile]) {
                 tag.setAttribute('aria-label', titleFor(mcc));
             }
+            cell.dataset.hsbcMccSignature = key;
+            cell.dataset.hsbcMccTransactionId = tx.id;
+            cell.dataset.hsbcMccRef = tx.ref;
             return;
         }
 
@@ -458,6 +538,7 @@
         cell.dataset.hsbcMcc = mcc;
         cell.dataset.hsbcMccSignature = key;
         cell.dataset.hsbcMccTransactionId = tx.id;
+        cell.dataset.hsbcMccRef = tx.ref;
     }
 
 
@@ -699,15 +780,29 @@
         scheduleDraw();
     }
 
+    function clearDbValidators() {
+        GM_setValue(STORE.etag, '');
+        GM_setValue(STORE.modified, '');
+    }
+
     function loadCachedDb() {
         const raw = GM_getValue(STORE.db, '');
-        if (!raw) return;
+        if (!raw) {
+            clearDbValidators();
+            return;
+        }
+
         try {
             const db = JSON.parse(raw);
-            if (validDb(db)) applyDb(db);
+            if (validDb(db)) {
+                applyDb(db);
+                return;
+            }
         } catch (error) {
             log('Ignoring invalid cached MCC DB:', error);
         }
+
+        clearDbValidators();
     }
 
     function responseHeaders(raw) {
@@ -792,6 +887,7 @@
 
     loadMerchantHistory();
     installNetworkHook();
+    installDownloadHook();
     loadCachedDb();
     refreshDb();
     registerMenu();
