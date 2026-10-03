@@ -7,17 +7,17 @@
     "floridaDfsPcard": "https://fs.fldfs.com/iwpapps/pcard/docs/MCCs.pdf"
   },
   "counts": {
-    "published": 1299,
+    "published": 1302,
     "qrbGlobalAbReferenced": 1155,
     "qrbCountrySpecificAbReferenced": 1624,
     "qrbAnyAbReferenced": 1624,
-    "qrbReferencedWithoutDescription": 328,
-    "sanAntonioReference": 879,
+    "qrbReferencedWithoutDescription": 325,
+    "sanAntonioReference": 920,
     "floridaDfsReference": 951,
-    "institutionalReferenceOverlap": 872,
+    "institutionalReferenceOverlap": 910,
     "mastercardAbProgramAdditions": 1,
-    "secondaryConsensusAdditions": 1,
-    "secondaryConsensusNotInPublishedDb": 7
+    "secondaryConsensusAdditions": 2,
+    "secondaryConsensusNotInPublishedDb": 11
   },
   "mastercardAbProgramAdditions": {
     "6555": {
@@ -31,10 +31,15 @@
     }
   },
   "secondaryConsensusAdditions": {
-    "5169": {
-      "description": "CHEMICALS & ALLIED PDCTS OTHR",
-      "sanAntonio": "CHEMICALS & ALLIED PDCTS OTHR",
-      "floridaDfs": "CHEMICALS AND ALLIED PRODUCTS (NEC)"
+    "9401": {
+      "description": "I-PURCHASING PILOT",
+      "sanAntonio": "I-PURCHASING PILOT",
+      "floridaDfs": "I-PURCHASING PILOT"
+    },
+    "9702": {
+      "description": "GCAS EMERGENCY SERVICES",
+      "sanAntonio": "GCAS EMERGENCY SERVICES",
+      "floridaDfs": "GCAS EMERGENCY SERVICES (VISA USE ONLY)"
     }
   },
   "qrbReferencedWithoutDescription": [
@@ -351,7 +356,6 @@
     "7015",
     "7231",
     "7232",
-    "7395",
     "7539",
     "7987",
     "7988",
@@ -361,9 +365,7 @@
     "8411",
     "8412",
     "8666",
-    "9401",
     "9407",
-    "9702",
     "9753",
     "9950"
   ],
@@ -395,6 +397,22 @@
     "7511": {
       "sanAntonio": "TRUCK STOPS",
       "floridaDfs": "TRUCK STOP TRANSACTIONS"
+    },
+    "9700": {
+      "sanAntonio": "AUTOMATED REFERRAL SERVICE",
+      "floridaDfs": "AUTOMATED REFERRAL SERVICE"
+    },
+    "9701": {
+      "sanAntonio": "VISA CREDENTIAL SERVER",
+      "floridaDfs": "VISA CREDENTIAL SERVER"
+    },
+    "9752": {
+      "sanAntonio": "GAS/AUTOMOTIVE/U.K. PETROL STATIONS-ELECTRONIC HOT FILE",
+      "floridaDfs": "U.K. PETROL STATIONS, ELECTRONIC HOT FILE"
+    },
+    "9754": {
+      "sanAntonio": "GAMBLING-HORSE RACING, DOG RACING, LOTTERIES",
+      "floridaDfs": "GAMBLING-HORSE, DOG RACING-ST LOTTERY"
     }
   }
 }

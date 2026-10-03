@@ -1071,7 +1071,7 @@
     "5131": "Piece Goods, Notions, and Other Dry Goods",
     "5137": "Men’s, Women’s, and Children’s Uniforms and Commercial Clothing",
     "5139": "Commercial Footwear",
-    "5169": "CHEMICALS & ALLIED PDCTS OTHR",
+    "5169": "Chemicals and Allied Products: not elsewhere classified",
     "5172": "Petroleum and Petroleum Products",
     "5192": "Books, Periodicals, and Newspapers",
     "5193": "Florists Supplies, Nursery Stock, and Flowers",
@@ -1236,6 +1236,7 @@
     "7392": "Consulting, Management, and Public Relations Services",
     "7393": "Detective Agencies, Protective Agencies, Security Services including Armored Cars, Guard Dogs",
     "7394": "Equipment Rental and Leasing Services, Furniture Rental, Tool Rental",
+    "7395": "Photo Developing, Photofinishing Laboratories",
     "7399": "Business Services: not elsewhere classified",
     "7512": "Automobile Rental Agency: not elsewhere classified",
     "7513": "Truck Rental",
@@ -1309,8 +1310,10 @@
     "9223": "Bail and Bond Payments",
     "9311": "Tax Payments",
     "9399": "Government Services: not elsewhere classified",
+    "9401": "I-PURCHASING PILOT",
     "9402": "Postal Services: Government Only",
     "9405": "Intra-Government Purchases: Government Only",
-    "9406": "Government-owned Lottery (global, excluding U.S. region)"
+    "9406": "Government-owned Lottery (global, excluding U.S. region)",
+    "9702": "GCAS EMERGENCY SERVICES"
   }
 }
