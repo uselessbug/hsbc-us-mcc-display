@@ -488,6 +488,75 @@ def clean_reference_description(desc: str, source: str) -> str:
     return clean_description(desc)
 
 
+def san_antonio_column_rows(text: str) -> dict[str, str]:
+    """Recover San Antonio pages whose PDF reading order emits MCCs as a column."""
+    recovered: dict[str, str] = {}
+
+    for page_no, page in enumerate(text.split("\f"), start=1):
+        lines = page.splitlines()
+        header_index = next(
+            (
+                i
+                for i, line in enumerate(lines)
+                if clean_description(line).upper() == "MCC DESCRIPTION"
+            ),
+            None,
+        )
+        if header_index is None:
+            continue
+
+        codes = [
+            line.strip()
+            for line in lines[:header_index]
+            if re.fullmatch(r"\d{4}", line.strip())
+        ]
+        if len(codes) < 5:
+            continue
+
+        descriptions: list[str] = []
+        for raw in lines[header_index + 1 :]:
+            line = clean_description(raw)
+            if not line:
+                continue
+            if re.fullmatch(r"\d{4}", line):
+                continue
+            if (
+                line.startswith("MERCHANT CATEGORY")
+                or line.startswith("CODE (MCC)")
+                or line.startswith("I I I")
+                or line.startswith('"INCLUDE" indicates')
+                or line.startswith("MCC is not restricted")
+                or re.match(r"^Page \d+ of \d+", line)
+            ):
+                continue
+
+            desc = clean_reference_description(line, "san-antonio-pcard")
+            if len(desc) >= 3:
+                descriptions.append(desc)
+            if len(descriptions) >= len(codes):
+                break
+
+        if len(descriptions) != len(codes):
+            raise RuntimeError(
+                f"san-antonio-pcard column page {page_no} has "
+                f"{len(codes)} MCCs but {len(descriptions)} descriptions"
+            )
+
+        for code, desc in zip(codes, descriptions):
+            previous = recovered.get(code)
+            if (
+                previous
+                and canonical_description(previous) != canonical_description(desc)
+            ):
+                raise RuntimeError(
+                    f"san-antonio-pcard column conflict for MCC {code}: "
+                    f"{previous!r} vs {desc!r}"
+                )
+            recovered[code] = desc
+
+    return recovered
+
+
 def extract_institutional_reference(text: str, source: str) -> dict[str, str]:
     """Extract MCC->description rows with conflict detection and sentinels."""
     candidates: dict[str, list[str]] = {}
@@ -501,6 +570,10 @@ def extract_institutional_reference(text: str, source: str) -> dict[str, str]:
         if len(desc) < 3:
             continue
         candidates.setdefault(code, []).append(desc)
+
+    if source == "san-antonio-pcard":
+        for code, desc in san_antonio_column_rows(text).items():
+            candidates.setdefault(code, []).append(desc)
 
     result: dict[str, str] = {}
     conflicts: dict[str, list[str]] = {}
