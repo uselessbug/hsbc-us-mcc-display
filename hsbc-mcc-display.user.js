@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HSBC US Credit Card MCC Display
 // @namespace    https://github.com/uselessbug/hsbc-us-mcc-display
-// @version      4.4.3
+// @version      4.4.4
 // @description  Show posted Mastercard MCCs and locally predict pending MCCs from merchant history.
 // @homepageURL  https://github.com/uselessbug/hsbc-us-mcc-display
 // @supportURL   https://github.com/uselessbug/hsbc-us-mcc-display/issues
@@ -446,17 +446,79 @@
     }
 
 
-    // The Account Home React component slices the unfiltered posted list before
-    // rendering; these FX bookkeeping records must not count towards its ten rows.
-    function isFxAuxiliary(tx) {
-        return !String(tx?.transactionCode?.display ?? '').trim()
-            && Number(tx?.transactionAmount) === 0;
+    // Transaction History's native rule is:
+    // subAccountCode === 'C' || Jm(config, code, embeddedFee, postDate) || transactionAmount.
+    // Jm is private to HSBC's bundle, so use its configuration and equivalent predicate.
+    let subAccountCode = '';
+    let embeddedFeeFeature = { enabled: false, effectiveDate: null };
+
+    function bankDate(value, monthFirst) {
+        const match = monthFirst
+            ? /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(value ?? ''))
+            : /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(value ?? ''));
+        if (!match) return null;
+        const [year, month, day] = monthFirst
+            ? [Number(match[3]), Number(match[1]), Number(match[2])]
+            : [Number(match[1]), Number(match[2]), Number(match[3])];
+        const date = new Date(Date.UTC(year, month - 1, day));
+        return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1
+            && date.getUTCDate() === day ? date.getTime() : null;
     }
 
-    // Give only Account Home a filtered *view* of the posted API payload. Our MCC
-    // parser uses the native XHR getters below, so it still sees the full payload
-    // and can associate FX amounts/rates with the visible transactions.
-    function exposeHomePostedResponse(xhr, textGetter, responseGetter) {
+    function nativeEmbeddedFeeMatch(tx) {
+        if (!embeddedFeeFeature.enabled) return false;
+        const cutoff = bankDate(embeddedFeeFeature.effectiveDate, true);
+        if (cutoff !== null) {
+            const posted = bankDate(tx?.postDate, false);
+            if (posted === null || posted < cutoff) return false;
+        }
+        return Boolean(
+            tx?.transactionCode
+            && ['253', '254', '255'].includes(tx.transactionCode.value)
+            && tx.embeddedFeeTransactionAmount
+        );
+    }
+
+    function historyKeepsTransaction(tx) {
+        if (subAccountCode === 'C') return true;
+        return Boolean(nativeEmbeddedFeeMatch(tx) || tx?.transactionAmount);
+    }
+
+    async function decryptBankConfig(encoded) {
+        const wire = atob(encoded);
+        const secret = unsafeWindow.GLOBAL_VARIABLES?.configEncryptionKey;
+        if (!secret) throw new Error('Missing HSBC config key');
+        const hexBytes = (s) => Uint8Array.from(s.match(/.{2}/g) ?? [], (h) => parseInt(h, 16));
+        const subtle = unsafeWindow.crypto.subtle;
+        const base = await subtle.importKey(
+            'raw', new TextEncoder().encode(secret), 'PBKDF2', false, ['deriveKey']
+        );
+        const key = await subtle.deriveKey(
+            { name: 'PBKDF2', salt: hexBytes(wire.slice(0, 64)), iterations: 1989, hash: 'SHA-256' },
+            base, { name: 'AES-CBC', length: 256 }, false, ['decrypt']
+        );
+        const bytes = await subtle.decrypt(
+            { name: 'AES-CBC', iv: hexBytes(wire.slice(64, 96)) },
+            Uint8Array.from(atob(wire.slice(96)), (c) => c.charCodeAt(0))
+        );
+        return JSON.parse(new TextDecoder().decode(bytes));
+    }
+
+    function applyBankConfig(config) {
+        embeddedFeeFeature = {
+            enabled: Boolean(config?.rules?.find((r) => r.name === 'Embed_Fee_On_Transaction')?.isEnabled),
+            effectiveDate: config?.featureGroups
+                ?.find((g) => g.name === 'SiteFeatures')?.features
+                ?.find((f) => f.name === 'TransactionHistory')?.attributes
+                ?.find((a) => a.name === 'EmbeddedFeesEffectiveDate')
+                ?.values?.[0]?.value ?? null,
+        };
+        log('HSBC native embedded-fee feature:', embeddedFeeFeature.enabled);
+    }
+
+    // All routes share postedtransactions in Redux. Filter each response before
+    // it reaches React; keep the native response intact for our MCC/FX parser.
+    function exposePostedResponse(xhr, textGetter, responseGetter) {
         if (!textGetter || !responseGetter) return;
         let checked = false;
         let view = null;
@@ -471,7 +533,7 @@
                         ? responseGetter.call(xhr)
                         : JSON.parse(textGetter.call(xhr));
                     if (!Array.isArray(original?.transactions)) return null;
-                    const transactions = original.transactions.filter((tx) => !isFxAuxiliary(tx));
+                    const transactions = original.transactions.filter(historyKeepsTransaction);
                     if (transactions.length === original.transactions.length) return null;
                     view = { ...original, transactions };
                     viewText = JSON.stringify(view);
@@ -531,15 +593,42 @@
 
         XHR.prototype.send = new Proxy(send, {
             apply(target, self, args) {
+                const url = urls.get(self) ?? '';
+                if (/\/ecs\/hsbc\/config\/[^/?#]+(?:[/?#]|$)/i.test(url)) {
+                    self.addEventListener('load', () => {
+                        if (self.status < 200 || self.status >= 300) return;
+                        try {
+                            const payload = parseXhr(self, nativeTextGetter, nativeResponseGetter);
+                            if (typeof payload?.config === 'string') {
+                                decryptBankConfig(payload.config).then(applyBankConfig).catch((error) =>
+                                    log('Unable to decrypt HSBC configuration:', error)
+                                );
+                            }
+                        } catch (error) {
+                            log('Unable to read HSBC configuration:', error);
+                        }
+                    }, { once: true });
+                }
+                if (/\/accounts\/v1\/profile(?:[/?#]|$)/i.test(url)) {
+                    self.addEventListener('load', () => {
+                        if (self.status < 200 || self.status >= 300) return;
+                        try {
+                            const payload = parseXhr(self, nativeTextGetter, nativeResponseGetter);
+                            const code = payload?.accounts?.[0]?.subAccountCode;
+                            if (typeof code === 'string') subAccountCode = code;
+                        } catch (error) {
+                            log('Unable to read HSBC account type:', error);
+                        }
+                    }, { once: true });
+                }
                 const isPosted = /\/transactions\/v1\/postedtransactions(?:[/?#]|$)/i.test(urls.get(self) ?? '');
                 if (isPosted) {
-                    // Filter before HSBC React performs its 10-minus-pending slice.
-                    if (/^\/ecs\/hsbc\/home\/?$/.test(unsafeWindow.location.pathname)) {
-                        try {
-                            exposeHomePostedResponse(self, nativeTextGetter, nativeResponseGetter);
-                        } catch (error) {
-                            log('Unable to filter Account Home transaction response:', error);
-                        }
+                    // Also filter History requests: otherwise they overwrite shared
+                    // Redux items with FX rows that reappear when returning to Home.
+                    try {
+                        exposePostedResponse(self, nativeTextGetter, nativeResponseGetter);
+                    } catch (error) {
+                        log('Unable to filter posted transaction response:', error);
                     }
                     const id = ++latestRequest;
                     posted.clear();
