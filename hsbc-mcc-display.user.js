@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HSBC US Credit Card MCC Display
 // @namespace    https://github.com/uselessbug/hsbc-us-mcc-display
-// @version      4.4.0
+// @version      4.4.3
 // @description  Show posted Mastercard MCCs and locally predict pending MCCs from merchant history.
 // @homepageURL  https://github.com/uselessbug/hsbc-us-mcc-display
 // @supportURL   https://github.com/uselessbug/hsbc-us-mcc-display/issues
@@ -263,7 +263,8 @@
     function rowParts(row) {
         const date = row.querySelector('td[data-label="Date"] .tran_date .small')
             ?? row.querySelector('td[data-label="Date"] .small');
-        const desc = row.querySelector('td.desc_column');
+        const desc = row.querySelector('td.desc_column')
+            ?? row.querySelector(':scope > td:nth-child(2)');
         const type = row.querySelector('td.type_column');
         const amount = row.querySelector('.trans_amt');
         const amountCell = amount?.closest('td');
@@ -444,15 +445,77 @@
         }, true);
     }
 
-    function parseXhr(xhr) {
-        if (xhr.responseType === 'json') return xhr.response;
-        if (xhr.responseType === '' || xhr.responseType === 'text') return JSON.parse(xhr.responseText);
+
+    // The Account Home React component slices the unfiltered posted list before
+    // rendering; these FX bookkeeping records must not count towards its ten rows.
+    function isFxAuxiliary(tx) {
+        return !String(tx?.transactionCode?.display ?? '').trim()
+            && Number(tx?.transactionAmount) === 0;
+    }
+
+    // Give only Account Home a filtered *view* of the posted API payload. Our MCC
+    // parser uses the native XHR getters below, so it still sees the full payload
+    // and can associate FX amounts/rates with the visible transactions.
+    function exposeHomePostedResponse(xhr, textGetter, responseGetter) {
+        if (!textGetter || !responseGetter) return;
+        let checked = false;
+        let view = null;
+        let viewText = null;
+
+        function getView() {
+            if (xhr.readyState !== 4 || xhr.status < 200 || xhr.status >= 300) return null;
+            if (!checked) {
+                checked = true;
+                try {
+                    const original = xhr.responseType === 'json'
+                        ? responseGetter.call(xhr)
+                        : JSON.parse(textGetter.call(xhr));
+                    if (!Array.isArray(original?.transactions)) return null;
+                    const transactions = original.transactions.filter((tx) => !isFxAuxiliary(tx));
+                    if (transactions.length === original.transactions.length) return null;
+                    view = { ...original, transactions };
+                    viewText = JSON.stringify(view);
+                    log('Account Home posted transactions:', transactions.length, 'of', original.transactions.length);
+                } catch (error) {
+                    log('Unable to prepare Account Home posted transactions:', error);
+                }
+            }
+            return view;
+        }
+
+        Object.defineProperties(xhr, {
+            responseText: {
+                configurable: true,
+                get() {
+                    if (xhr.responseType !== '' && xhr.responseType !== 'text') return textGetter.call(xhr);
+                    return getView() ? viewText : textGetter.call(xhr);
+                },
+            },
+            response: {
+                configurable: true,
+                get() {
+                    if (!['', 'text', 'json'].includes(xhr.responseType)) return responseGetter.call(xhr);
+                    const filtered = getView();
+                    return filtered ? (xhr.responseType === 'json' ? filtered : viewText) : responseGetter.call(xhr);
+                },
+            },
+        });
+    }
+
+    function parseXhr(xhr, nativeTextGetter, nativeResponseGetter) {
+        if (xhr.responseType === 'json') return nativeResponseGetter ? nativeResponseGetter.call(xhr) : xhr.response;
+        if (xhr.responseType === '' || xhr.responseType === 'text') {
+            const raw = nativeTextGetter ? nativeTextGetter.call(xhr) : xhr.responseText;
+            return JSON.parse(raw);
+        }
         return null;
     }
 
     function installNetworkHook() {
         const XHR = unsafeWindow.XMLHttpRequest;
         if (!XHR?.prototype || XHR.prototype.__hsbcMccHooked) return;
+        const nativeTextGetter = Object.getOwnPropertyDescriptor(XHR.prototype, 'responseText')?.get;
+        const nativeResponseGetter = Object.getOwnPropertyDescriptor(XHR.prototype, 'response')?.get;
         Object.defineProperty(XHR.prototype, '__hsbcMccHooked', { value: true });
 
         const urls = new WeakMap();
@@ -470,6 +533,14 @@
             apply(target, self, args) {
                 const isPosted = /\/transactions\/v1\/postedtransactions(?:[/?#]|$)/i.test(urls.get(self) ?? '');
                 if (isPosted) {
+                    // Filter before HSBC React performs its 10-minus-pending slice.
+                    if (/^\/ecs\/hsbc\/home\/?$/.test(unsafeWindow.location.pathname)) {
+                        try {
+                            exposeHomePostedResponse(self, nativeTextGetter, nativeResponseGetter);
+                        } catch (error) {
+                            log('Unable to filter Account Home transaction response:', error);
+                        }
+                    }
                     const id = ++latestRequest;
                     posted.clear();
                     postedExport = [];
@@ -478,7 +549,7 @@
                     self.addEventListener('load', () => {
                         if (id !== latestRequest || self.status < 200 || self.status >= 300) return;
                         try {
-                            const payload = parseXhr(self);
+                            const payload = parseXhr(self, nativeTextGetter, nativeResponseGetter);
                             if (payload) processPosted(payload);
                         } catch (error) {
                             log('Unable to parse postedtransactions:', error);
@@ -545,8 +616,10 @@
 
 
     function pendingRowParts(row) {
-        const desc = row.querySelector('td[data-label="Description"]');
-        const type = row.querySelector('td[data-label="Type"]');
+        const desc = row.querySelector('td[data-label="Description"]')
+            ?? row.querySelector(':scope > td:nth-child(2)');
+        const type = row.querySelector('td[data-label="Type"]')
+            ?? row.querySelector(':scope > td:nth-child(3)');
         if (!desc || !type) return null;
         return {
             desc: desc.textContent.trim(),
@@ -651,7 +724,10 @@
             syncFx(p.amountCell, tx);
         }
 
-        for (const row of document.querySelectorAll('#transaction-history .pending_table tbody tr')) {
+        // Both tables mix transaction types; only .gray represents a pending row.
+        for (const row of document.querySelectorAll(
+            '#transaction-history .pending_table tbody tr.gray, #acc_table .pending_table tbody tr.gray'
+        )) {
             const p = pendingRowParts(row);
             if (!p) continue;
             syncPrediction(p.cell, predictMcc(p.desc));
