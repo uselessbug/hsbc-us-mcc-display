@@ -83,7 +83,7 @@ COMPLETE_TITLE_CHECKS = {
     "4814": ("recurring phone services",),
     "5813": ("alcoholic beverages",),
     "7372": ("integrated systems design services",),
-    "7802": ("u.s. region only",),
+    "7802": ("u.s. region", "only"),
     "7997": ("private golf courses",),
     "9406": ("excluding u.s. region",),
 }
@@ -164,17 +164,23 @@ def clean_description(value: str) -> str:
     return value
 
 
+QRB_RUNNING_HEADERS = {
+    "acceptor business codes (mccs)",
+    "acceptor business codes (mccs): extended",
+    "ab program listing with acceptor business codes (mccs)",
+    "country-specific ab programs with acceptor business codes (mccs)",
+    "industry specific acceptor business codes (mccs)",
+}
+
+
 def qrb_noise(value: str) -> bool:
     line = clean_description(value)
     if not line:
         return True
     return (
         line.startswith("Quick Reference Booklet")
-        or line.startswith("© 1990")
-        or line == "Acceptor business codes (MCCs)"
-        or line == "AB program listing with acceptor business codes (MCCs)"
-        or line == "Country-specific AB programs with acceptor business codes (MCCs)"
-        or line == "Industry Specific Acceptor Business Codes (MCCs)"
+        or re.match(r"^©\s*\d{4}\b", line) is not None
+        or line.casefold() in QRB_RUNNING_HEADERS
     )
 
 
@@ -228,16 +234,23 @@ def direct_code_list(value: str) -> list[str] | None:
     return result
 
 
-def section(text: str, start_marker: str, end_marker: str | None = None) -> str:
+def section(
+    text: str,
+    start_marker: str,
+    end_marker: str | tuple[str, ...] | None = None,
+) -> str:
     start = text.find(start_marker)
     if start < 0:
         raise RuntimeError(f"Unable to find QRB section: {start_marker}")
     if end_marker is None:
         return text[start:]
-    end = text.find(end_marker, start + len(start_marker))
-    if end < 0:
-        raise RuntimeError(f"Unable to find QRB section end: {end_marker}")
-    return text[start:end]
+    markers = (end_marker,) if isinstance(end_marker, str) else end_marker
+    search_from = start + len(start_marker)
+    positions = [pos for marker in markers if (pos := text.find(marker, search_from)) >= 0]
+    if not positions:
+        label = end_marker if isinstance(end_marker, str) else " / ".join(repr(m) for m in markers)
+        raise RuntimeError(f"Unable to find QRB section end: {label}")
+    return text[start : min(positions)]
 
 
 def parse_ab_programs(segment: str) -> dict[str, dict[str, object]]:
@@ -440,7 +453,7 @@ def extract_mastercard(
     country_segment = section(
         text,
         "Country-specific AB programs with associated MCCs",
-        "Processing exceptions",
+        ("Processing exceptions", "\nNotices\n"),
     )
     country_programs = parse_ab_programs(country_segment)
     country_codes = program_codes(country_programs)
@@ -495,7 +508,12 @@ def clean_reference_description(desc: str, source: str) -> str:
             desc,
             flags=re.IGNORECASE,
         )
-        desc = re.sub(r'\s+"?INCLUDE"?\s*$', "", desc, flags=re.IGNORECASE)
+        desc = re.sub(
+            r'\s+(?:"?INCLUDE"?|Allowed|Blocked|Restricted)\s*$',
+            "",
+            desc,
+            flags=re.IGNORECASE,
+        )
     elif source == "florida-dfs":
         desc = re.sub(r"\s+[ARP]\s*$", "", desc)
     return clean_description(desc)
@@ -516,10 +534,13 @@ def san_antonio_column_rows(text: str) -> dict[str, str]:
 
     def structural(line: str) -> bool:
         normalized = clean_description(line)
+        upper = normalized.upper()
         return (
             not normalized
-            or normalized.startswith("MERCHANT CATEGORY")
-            or normalized.startswith("CODE (MCC)")
+            or upper.startswith("MERCHANT CATEGORY")
+            or upper.startswith("CODE (MCC)")
+            or upper.startswith("MCC DESCRIPTION")
+            or upper.startswith("SUBMIT A MAINTENANCE REQUEST")
             or normalized.startswith("I I I")
             or normalized.startswith('"INCLUDE" indicates')
             or normalized.startswith("MCC is not restricted")
