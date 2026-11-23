@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "version": "2026-06-02",
+  "version": "2026-11-10",
   "sources": {
     "mastercardQrb": "https://www.mastercard.com/content/dam/mccom/shared/business/support/rules-pdfs/mastercard-quick-reference-booklet-merchant.pdf",
     "sanAntonioPcard": "https://www.sanantonio.gov/Portals/0/Files/Purchasing/PCard/MerchantCategoryCodes.pdf",
@@ -9,14 +9,14 @@
   "counts": {
     "published": 1301,
     "qrbGlobalAbReferenced": 1155,
-    "qrbCountrySpecificAbReferenced": 1507,
-    "qrbAnyAbReferenced": 1564,
-    "qrbReferencedWithoutDescription": 325,
-    "sanAntonioReference": 920,
+    "qrbCountrySpecificAbReferenced": 1515,
+    "qrbAnyAbReferenced": 1569,
+    "qrbReferencedWithoutDescription": 327,
+    "sanAntonioReference": 905,
     "floridaDfsReference": 951,
-    "institutionalReferenceOverlap": 910,
+    "institutionalReferenceOverlap": 879,
     "mastercardAbProgramAdditions": 1,
-    "secondaryConsensusAdditions": 1,
+    "secondaryConsensusAdditions": 2,
     "secondaryConsensusNotInPublishedDb": 12
   },
   "mastercardAbProgramAdditions": {
@@ -32,9 +32,14 @@
   },
   "secondaryConsensusAdditions": {
     "9401": {
-      "description": "I-PURCHASING PILOT",
-      "sanAntonio": "I-PURCHASING PILOT",
+      "description": "I PURCHASING PILOT (TEST MCC)",
+      "sanAntonio": "I PURCHASING PILOT (TEST MCC)",
       "floridaDfs": "I-PURCHASING PILOT"
+    },
+    "9950": {
+      "description": "INTRA COMPANY PURCHASES",
+      "sanAntonio": "INTRA COMPANY PURCHASES",
+      "floridaDfs": "INTRA-COMPANY PURCHASES"
     }
   },
   "qrbReferencedWithoutDescription": [
@@ -316,6 +321,7 @@
     "4817",
     "4818",
     "4819",
+    "5262",
     "5312",
     "5313",
     "5314",
@@ -359,58 +365,59 @@
     "8411",
     "8412",
     "8666",
+    "8912",
+    "9400",
     "9407",
     "9702",
-    "9753",
-    "9950"
+    "9753"
   ],
   "secondaryConsensusNotInPublishedDb": {
+    "4723": {
+      "sanAntonio": "PACKAGE TOUR OPERATORS (GERMANY ONLY)",
+      "floridaDfs": "PACKAGE TOUR OPERATORS - GERMANY ONLY"
+    },
     "6381": {
       "sanAntonio": "INSURANCE PREMIUMS",
       "floridaDfs": "INSURANCE PREMIUMS"
     },
     "6529": {
-      "sanAntonio": "REMOTE STORED VALUE LOAD - MEMBER FIN INSTITUTION",
+      "sanAntonio": "REMOTE STORED VALUE LOAD MEMBER",
       "floridaDfs": "REMOTE STORED VALUE LOAD-MEMBER FINANCIAL INSTITUTION"
     },
     "6530": {
-      "sanAntonio": "REMOTE STORED VALUE LOAD - MERCHANT",
+      "sanAntonio": "REMOTE STORED VALUE LOAD MERCHANT",
       "floridaDfs": "REMOTE STORED VALUE LOAD"
     },
-    "6531": {
-      "sanAntonio": "PAYMENT SERVICE PROVIDER",
-      "floridaDfs": "PAYMENT SERVICE PROVIDER-MONEY TRANSFER"
-    },
     "6534": {
-      "sanAntonio": "MONEY TRANSFER-MEMBER",
+      "sanAntonio": "MONEY TRANSFER MEMBER",
       "floridaDfs": "MONEY TRANSFER-MEMBER FINANCIAL INSTITUT"
     },
     "6535": {
-      "sanAntonio": "VALUE PURCHASE-MEMBER FINANCIAL INSTITUTIONS",
+      "sanAntonio": "VALUE PURCHASE MEMBER FINANCIAL INSTITUTIONS",
       "floridaDfs": "VALUE PURCHASE-MEMBER FINANCIAL INSTITUT"
     },
     "7511": {
-      "sanAntonio": "TRUCK STOPS",
+      "sanAntonio": "TRUCK STOP TRANSACTIONS",
       "floridaDfs": "TRUCK STOP TRANSACTIONS"
     },
     "9700": {
-      "sanAntonio": "AUTOMATED REFERRAL SERVICE",
+      "sanAntonio": "AUTOMATED REFERRAL SERVICE ( FOR VISA ONLY)",
       "floridaDfs": "AUTOMATED REFERRAL SERVICE"
-    },
-    "9701": {
-      "sanAntonio": "VISA CREDENTIAL SERVER",
-      "floridaDfs": "VISA CREDENTIAL SERVER"
     },
     "9702": {
       "sanAntonio": "GCAS EMERGENCY SERVICES",
       "floridaDfs": "GCAS EMERGENCY SERVICES (VISA USE ONLY)"
     },
+    "9751": {
+      "sanAntonio": "UK SUPERMARKETS ELECTRONIC HOT FILE",
+      "floridaDfs": "U.K. SUPERMARKETS, ELECTRONIC HOT FILE"
+    },
     "9752": {
-      "sanAntonio": "GAS/AUTOMOTIVE/U.K. PETROL STATIONS-ELECTRONIC HOT FILE",
+      "sanAntonio": "UK PETROLS STATIONS ELECTRONIC HOT FILE",
       "floridaDfs": "U.K. PETROL STATIONS, ELECTRONIC HOT FILE"
     },
     "9754": {
-      "sanAntonio": "GAMBLING-HORSE RACING, DOG RACING, LOTTERIES",
+      "sanAntonio": "GAMBLING HORSE RACING, DOG RACING, LOTTERIES",
       "floridaDfs": "GAMBLING-HORSE, DOG RACING-ST LOTTERY"
     }
   }
